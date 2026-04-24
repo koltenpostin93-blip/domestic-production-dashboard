@@ -10,15 +10,18 @@ API_KEY   = st.secrets["NASS_API_KEY"]
 BASE_URL  = "https://quickstats.nass.usda.gov/api/api_GET/"
 THIS_YEAR = date.today().year
 
-DARK_BG   = "#32373c"
-DARK_CARD = "#3d4349"
-DARK_ALT  = "#2a2e32"
-BLUE      = "#0693e3"
+# JPSI brand colors — sourced directly from jpsi.com computed styles
+DARK_BG   = "#4a4849"   # JPSI top banner dark
+DARK_CARD = "#3a3838"   # slightly deeper card surface
+DARK_ALT  = "#1f1f1f"   # JPSI footer dark (sidebar, deepest bg)
+TEAL      = "#5ba5af"   # JPSI primary CTA teal
+TEAL_DIM  = "#3d7a84"   # darker teal for hover / secondary accents
 AMBER     = "#f59e0b"
 GREEN     = "#22c55e"
 RED       = "#ef4444"
 WHITE     = "#ffffff"
-GRAY      = "#9ca3af"
+GRAY      = "#b0abab"   # warm gray to match JPSI's warm dark palette
+BLUE      = TEAL        # alias so chart helpers keep working
 
 STATE_ABBREV = {
     "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR",
@@ -97,8 +100,8 @@ st.markdown(f"""
 
   /* Top accent bar */
   .jsa-topbar {{
-    background: {BLUE};
-    height: 4px;
+    background: linear-gradient(90deg, {TEAL} 0%, {TEAL_DIM} 100%);
+    height: 5px;
     width: 100%;
     margin-bottom: 0;
   }}
@@ -537,7 +540,7 @@ with tab_state:
             locationmode="USA-states",
             color="value",
             scope="usa",
-            color_continuous_scale=[[0, "#1c2b3a"], [0.4, "#0693e3"], [1, "#bfdbfe"]],
+            color_continuous_scale=[[0, "#1a2a2c"], [0.4, "#5ba5af"], [1, "#b8dde2"]],
             hover_name="state_name",
             hover_data={"value": ":,.0f", "state_abbr": False},
             labels={"value": map_metric},
