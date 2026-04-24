@@ -76,6 +76,9 @@ COMMODITY_ICONS = {
     "Corn": "🌽", "Soybeans": "🫘", "Wheat": "🌾", "Cotton": "🪴", "Sorghum": "🌿",
 }
 
+LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
+LOGO_FULL  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Domestic Production | JSA",
@@ -86,30 +89,113 @@ st.set_page_config(
 
 st.markdown(f"""
 <style>
-  .stApp {{ background-color: {DARK_BG}; color: {WHITE}; }}
-  section[data-testid="stSidebar"] {{ background-color: {DARK_ALT}; }}
-  .stTabs [data-baseweb="tab-list"] {{ background-color: {DARK_CARD}; border-radius: 8px; gap: 4px; }}
-  .stTabs [data-baseweb="tab"] {{ color: {GRAY}; border-radius: 6px; }}
-  .stTabs [aria-selected="true"] {{ color: {WHITE}; background-color: {DARK_ALT}; }}
+  @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&display=swap');
+
+  .stApp {{ background-color: {DARK_BG}; color: {WHITE}; font-family: 'Open Sans', sans-serif; }}
+  section[data-testid="stSidebar"] {{ background-color: {DARK_ALT}; border-right: 1px solid #1e2226; }}
+  section[data-testid="stSidebar"] * {{ font-family: 'Open Sans', sans-serif; }}
+
+  /* Top accent bar */
+  .jsa-topbar {{
+    background: {BLUE};
+    height: 4px;
+    width: 100%;
+    margin-bottom: 0;
+  }}
+
+  /* Page header */
+  .jsa-header {{
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 18px 0 14px;
+    border-bottom: 1px solid #4a5568;
+    margin-bottom: 20px;
+  }}
+  .jsa-header img {{ height: 36px; }}
+  .jsa-header-divider {{
+    width: 1px; height: 36px;
+    background: #4a5568;
+  }}
+  .jsa-header-title {{
+    font-size: 20px;
+    font-weight: 700;
+    color: {WHITE};
+    letter-spacing: -0.01em;
+  }}
+  .jsa-header-sub {{
+    font-size: 12px;
+    color: {GRAY};
+    margin-top: 2px;
+    font-weight: 400;
+  }}
+
+  /* Sidebar logo area */
+  .jsa-sidebar-logo {{
+    padding: 20px 0 16px;
+    text-align: center;
+    border-bottom: 1px solid #3a3f44;
+    margin-bottom: 4px;
+  }}
+  .jsa-sidebar-logo img {{ height: 28px; }}
+
+  /* Tabs */
+  .stTabs [data-baseweb="tab-list"] {{
+    background-color: {DARK_CARD};
+    border-radius: 6px;
+    gap: 2px;
+    border: 1px solid #4a5568;
+  }}
+  .stTabs [data-baseweb="tab"] {{
+    color: {GRAY};
+    border-radius: 5px;
+    font-family: 'Open Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+  }}
+  .stTabs [aria-selected="true"] {{
+    color: {WHITE};
+    background-color: {BLUE} !important;
+  }}
+
+  /* Sidebar labels */
   div[data-testid="stSelectbox"] label,
   div[data-testid="stMultiSelect"] label,
-  div[data-testid="stSlider"] label {{ color: {GRAY} !important; font-size: 13px; }}
+  div[data-testid="stSlider"] label {{
+    color: {GRAY} !important;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }}
+
+  /* KPI cards */
   .kpi-card {{
     background: {DARK_CARD};
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 18px 20px 14px;
-    border-left: 4px solid {BLUE};
+    border-top: 3px solid {BLUE};
+    border-left: none;
     height: 100%;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.25);
   }}
-  .kpi-label {{ color: {GRAY}; font-size: 12px; font-weight: 600;
-                text-transform: uppercase; letter-spacing: .06em; margin-bottom: 6px; }}
-  .kpi-value {{ color: {WHITE}; font-size: 30px; font-weight: 700; line-height: 1.1; }}
-  .kpi-year  {{ color: {GRAY}; font-size: 11px; margin-top: 4px; }}
-  .kpi-delta {{ font-size: 13px; margin-top: 2px; }}
+  .kpi-label  {{ color: {GRAY}; font-size: 11px; font-weight: 700;
+                 text-transform: uppercase; letter-spacing: .08em; margin-bottom: 8px; }}
+  .kpi-value  {{ color: {WHITE}; font-size: 28px; font-weight: 700; line-height: 1.1;
+                 font-family: 'Open Sans', sans-serif; }}
+  .kpi-year   {{ color: {GRAY}; font-size: 11px; margin-top: 5px; }}
+  .kpi-delta  {{ font-size: 13px; margin-top: 3px; font-weight: 600; }}
   .pos {{ color: {GREEN}; }}
   .neg {{ color: {RED}; }}
-  .data-note {{ background: {DARK_CARD}; border-left: 3px solid {AMBER};
-                padding: 8px 14px; border-radius: 4px; font-size: 13px; color: {GRAY}; }}
+
+  .data-note {{
+    background: {DARK_CARD};
+    border-left: 3px solid {AMBER};
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    color: {GRAY};
+  }}
   hr {{ border-color: #4a5568; margin: 16px 0; }}
 </style>
 """, unsafe_allow_html=True)
@@ -230,8 +316,15 @@ def _base_layout(fig, title="", height=390):
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown(f"<h2 style='color:{BLUE};margin-bottom:0'>🌾 Domestic Production</h2>", unsafe_allow_html=True)
-    st.markdown(f"<p style='color:{GRAY};font-size:12px;margin-top:2px'>USDA NASS QuickStats</p>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='jsa-sidebar-logo'><img src='{LOGO_WHITE}' alt='JSA Logo'></div>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f"<p style='color:{GRAY};font-size:11px;text-align:center;margin:-8px 0 12px;'>"
+        f"DOMESTIC PRODUCTION</p>",
+        unsafe_allow_html=True,
+    )
     st.markdown("---")
 
     commodity = st.selectbox(
@@ -260,9 +353,17 @@ with st.sidebar:
 
 # ── Header ───────────────────────────────────────────────────────────────────
 icon = COMMODITY_ICONS.get(commodity, "")
-st.markdown(f"<h1 style='color:{WHITE};margin-bottom:2px'>{icon} {commodity} Production Dashboard</h1>", unsafe_allow_html=True)
-st.markdown(f"<p style='color:{GRAY};margin-top:0;font-size:14px'>National & State Level &nbsp;|&nbsp; USDA NASS Annual Data</p>", unsafe_allow_html=True)
-st.markdown("---")
+st.markdown("<div class='jsa-topbar'></div>", unsafe_allow_html=True)
+st.markdown(f"""
+<div class='jsa-header'>
+  <img src='{LOGO_WHITE}' alt='JSA'>
+  <div class='jsa-header-divider'></div>
+  <div>
+    <div class='jsa-header-title'>{icon} {commodity} Production Dashboard</div>
+    <div class='jsa-header-sub'>National &amp; State Level &nbsp;·&nbsp; USDA NASS Annual Data &nbsp;·&nbsp; John Stewart &amp; Associates</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 # ── Load data ────────────────────────────────────────────────────────────────
 with st.spinner("Fetching USDA NASS data..."):
