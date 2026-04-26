@@ -238,6 +238,32 @@ st.markdown(f"""
     color: {GRAY};
   }}
   hr {{ border-color: #4a5568; margin: 16px 0; }}
+
+  /* Pill-style radio filter */
+  div[data-testid="stRadio"] > label {{ display: none; }}
+  div[data-testid="stRadio"] > div {{
+    display: flex; gap: 8px; flex-wrap: wrap;
+  }}
+  div[data-testid="stRadio"] > div > label {{
+    background: {DARK_CARD};
+    border: 1px solid #4a5568;
+    border-radius: 20px;
+    padding: 6px 18px;
+    color: {GRAY};
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }}
+  div[data-testid="stRadio"] > div > label:hover {{
+    border-color: {TEAL};
+    color: {WHITE};
+  }}
+  div[data-testid="stRadio"] > div > label[data-checked="true"] {{
+    background: {TEAL};
+    border-color: {TEAL};
+    color: {WHITE};
+  }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -272,6 +298,22 @@ def _fmt(v: float, metric: str) -> str:
 
 def _ytick(metric: str) -> str:
     return ".1f" if ("Yield" in metric or "/Ac" in metric) else ",.0f"
+
+def _bar_label(v: float, metric: str) -> str:
+    """Format bar chart labels: production in millions with unit suffix, acres in M ac, yield as-is."""
+    if "Production" in metric:
+        unit = metric.split("(")[-1].replace(")", "").strip()
+        if unit == "Bu":
+            return f"{v/1_000_000:.1f}M Bu"
+        elif unit == "Lb":
+            return f"{v/1_000_000:.1f}M Lbs"
+        elif unit == "Tons":
+            return f"{v/1_000_000:.1f}M T"
+        elif "Bales" in unit:
+            return f"{v/1_000:.0f}K Bales"
+    if "Acres" in metric:
+        return f"{v/1_000_000:.1f}M Ac"
+    return _fmt(v, metric)
 
 # ── Data loaders ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -380,8 +422,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>State Level</p>", unsafe_allow_html=True)
-    map_year   = st.selectbox("Map Year",   list(range(THIS_YEAR, 1999, -1)))
-    map_metric = st.selectbox("Map Metric", metric_list)
+    map_year = st.selectbox("Map Year", list(range(THIS_YEAR, 1999, -1)))
 
     st.markdown("---")
     st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>State Trend</p>", unsafe_allow_html=True)
@@ -568,6 +609,17 @@ with tab_state:
         st.warning(f"No state data available for {commodity} in {map_year}.")
         st.stop()
 
+    # ── Metric pill filter ────────────────────────────────────────────────────
+    prod_default = next((m for m in metric_list if "Production" in m), metric_list[0])
+    map_metric = st.radio(
+        "State metric",
+        metric_list,
+        index=metric_list.index(prod_default),
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
+
     metric_snap = snap_df[snap_df["metric"] == map_metric].copy()
 
     if not metric_snap.empty:
@@ -603,7 +655,7 @@ with tab_state:
         fig_bar = go.Figure(go.Bar(
             x=top15["state_abbr"], y=top15["value"],
             marker_color=BLUE,
-            text=top15["value"].apply(lambda v: _fmt(v, map_metric)),
+            text=top15["value"].apply(lambda v: _bar_label(v, map_metric)),
             textposition="outside", textfont=dict(color=WHITE, size=11),
             hovertemplate="<b>%{x}</b><br>" + map_metric + ": %{y:" + _ytick(map_metric) + "}<extra></extra>",
         ))
