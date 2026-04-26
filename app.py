@@ -659,6 +659,7 @@ with tab_state:
                 ),
                 height=480,
                 margin=dict(l=0, r=0, t=50, b=0),
+                dragmode=False,
             )
             # White state borders
             fig_map.update_traces(marker_line_color="white", marker_line_width=0.6)
@@ -684,6 +685,7 @@ with tab_state:
                 use_container_width=True,
                 on_select="rerun",
                 key=f"map_{commodity}_{map_year}_{map_metric}",
+                config={"scrollZoom": False, "displayModeBar": False},
             )
 
             # ── Resolve selected state from click event ───────────────────────
