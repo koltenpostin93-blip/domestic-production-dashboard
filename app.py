@@ -316,19 +316,21 @@ def _ytick(metric: str) -> str:
     return ".1f" if ("Yield" in metric or "/Ac" in metric) else ",.0f"
 
 def _bar_label(v: float, metric: str) -> str:
-    """Format bar chart labels: production in millions with unit suffix, acres in M ac, yield as-is."""
-    if "Production" in metric:
-        unit = metric.split("(")[-1].replace(")", "").strip()
-        if unit == "Bu":
-            return f"{v/1_000_000:.1f}M Bu"
-        elif unit == "Lb":
-            return f"{v/1_000_000:.1f}M Lbs"
-        elif unit == "Tons":
-            return f"{v/1_000_000:.1f}M T"
-        elif "Bales" in unit:
-            return f"{v/1_000:.0f}K Bales"
+    if "Yield" in metric:
+        unit = metric.split("(")[-1].replace(")", "").strip()   # Bu/Ac, Lb/Ac, Tons/Ac
+        return f"{v:.0f} {unit}"
     if "Acres" in metric:
         return f"{v/1_000_000:.1f}M Ac"
+    if "Production" in metric:
+        unit = metric.split("(")[-1].replace(")", "").strip()
+        if "Bu" in unit:
+            return f"{v/1_000_000:.1f}M Bu"
+        elif "Lb" in unit:
+            return f"{v/1_000_000:.1f}M Lbs"
+        elif "Ton" in unit:
+            return f"{v/1_000_000:.1f}M Tons"
+        elif "Bales" in unit:
+            return f"{v/1_000:.0f}K Bales"
     return _fmt(v, metric)
 
 # ── Data loaders ─────────────────────────────────────────────────────────────
