@@ -422,7 +422,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>State Level</p>", unsafe_allow_html=True)
-    map_year = st.selectbox("Map Year", list(range(THIS_YEAR, 1999, -1)))
+    map_year = st.selectbox("Map Year", list(range(THIS_YEAR - 1, 1999, -1)))
 
 
 # ── Header ───────────────────────────────────────────────────────────────────
@@ -644,27 +644,25 @@ with tab_state:
                 clickmode="event+select",
             )
 
-            map_event = st.plotly_chart(
-                fig_map,
-                use_container_width=True,
-                on_select="rerun",
-                key=f"choropleth_{commodity}_{map_year}_{map_metric}",
-            )
+            st.plotly_chart(fig_map, use_container_width=True)
 
-            # ── Resolve clicked state ─────────────────────────────────────────
-            selected_abbr = None
-            selected_name = None
-            pts = (map_event.selection.points if map_event and map_event.selection else [])
-            if pts:
-                cd = pts[0].get("customdata")
-                if cd and len(cd) >= 2:
-                    selected_abbr = cd[0]
-                    selected_name = cd[1].title()
+            # ── State selector ────────────────────────────────────────────────
+            state_options = sorted(metric_snap["state_abbr"].tolist())
+            state_labels  = ["— Select a state —"] + state_options
+            sel_col, _ = st.columns([1, 3])
+            chosen = sel_col.selectbox(
+                "Select State",
+                state_labels,
+                index=0,
+                label_visibility="collapsed",
+            )
+            selected_abbr = None if chosen == "— Select a state —" else chosen
+            selected_name = ABBREV_STATE.get(selected_abbr, "").title() if selected_abbr else None
 
             # ── Top-15 bar ───────────────────────────────────────────────────
             top15 = metric_snap.sort_values("value", ascending=False).head(15)
             bar_colors = [
-                TEAL if row["state_abbr"] == selected_abbr else "#4a7a82"
+                TEAL if row["state_abbr"] == selected_abbr else TEAL_DIM
                 for _, row in top15.iterrows()
             ]
             fig_bar = go.Figure(go.Bar(
@@ -679,7 +677,7 @@ with tab_state:
             _base_layout(fig_bar, title=f"Top 15 States — {map_metric} ({map_year})", height=400)
             fig_bar.update_yaxes(tickformat=_ytick(map_metric))
             fig_bar.update_layout(showlegend=False)
-            st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{commodity}_{map_year}_{map_metric}")
+            st.plotly_chart(fig_bar, use_container_width=True)
 
             # ── State historical section ──────────────────────────────────────
             st.markdown("---")
