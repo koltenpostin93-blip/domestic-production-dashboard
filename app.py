@@ -40,6 +40,22 @@ STATE_ABBREV = {
 }
 ABBREV_STATE = {v: k for k, v in STATE_ABBREV.items()}
 
+# Approximate geographic centers for state label placement
+STATE_CENTERS = {
+    "AL":(32.8,-86.8),"AZ":(34.3,-111.1),"AR":(34.8,-92.2),"CA":(37.2,-119.5),
+    "CO":(39.0,-105.5),"CT":(41.6,-72.7),"DE":(39.0,-75.5),"FL":(28.6,-81.5),
+    "GA":(32.9,-83.4),"ID":(44.4,-114.6),"IL":(40.0,-89.2),"IN":(39.9,-86.3),
+    "IA":(42.1,-93.5),"KS":(38.5,-98.4),"KY":(37.5,-85.3),"LA":(31.0,-91.8),
+    "ME":(45.4,-69.0),"MD":(39.1,-76.8),"MA":(42.2,-71.5),"MI":(44.3,-85.4),
+    "MN":(46.4,-93.1),"MS":(32.7,-89.7),"MO":(38.4,-92.6),"MT":(47.0,-110.0),
+    "NE":(41.5,-99.9),"NV":(39.3,-117.1),"NH":(43.7,-71.6),"NJ":(40.2,-74.7),
+    "NM":(34.5,-106.1),"NY":(42.9,-75.5),"NC":(35.5,-79.4),"ND":(47.5,-100.5),
+    "OH":(40.3,-82.8),"OK":(35.6,-97.5),"OR":(44.1,-120.5),"PA":(40.9,-77.8),
+    "SC":(33.8,-80.9),"SD":(44.4,-100.2),"TN":(35.8,-86.4),"TX":(31.1,-97.6),
+    "UT":(39.4,-111.1),"VT":(44.0,-72.7),"VA":(37.8,-79.5),"WA":(47.4,-120.5),
+    "WV":(38.6,-80.6),"WI":(44.3,-89.8),"WY":(43.0,-107.6),
+}
+
 # ── Commodity definitions — add new crops here ───────────────────────────────
 # Each commodity maps metric labels to NASS QuickStats parameters.
 COMMODITIES = {
@@ -639,21 +655,41 @@ with tab_state:
                     title=dict(text=map_metric, font=dict(color=GRAY, size=11)),
                     tickfont=dict(color=WHITE), bgcolor=DARK_CARD, bordercolor=DARK_ALT,
                 ),
-                height=460,
+                height=480,
                 margin=dict(l=0, r=0, t=50, b=0),
-                clickmode="event+select",
             )
+            # White state borders
+            fig_map.update_traces(marker_line_color="white", marker_line_width=0.6)
+
+            # State value labels via scattergeo
+            lbl_lats, lbl_lons, lbl_texts = [], [], []
+            for _, row in metric_snap.iterrows():
+                abbr = row["state_abbr"]
+                if abbr in STATE_CENTERS:
+                    lbl_lats.append(STATE_CENTERS[abbr][0])
+                    lbl_lons.append(STATE_CENTERS[abbr][1])
+                    lbl_texts.append(_bar_label(row["value"], map_metric))
+            fig_map.add_trace(go.Scattergeo(
+                lat=lbl_lats, lon=lbl_lons, text=lbl_texts,
+                mode="text",
+                textfont=dict(color=WHITE, size=8, family="Open Sans"),
+                showlegend=False,
+            ))
 
             st.plotly_chart(fig_map, use_container_width=True)
 
             # ── State selector ────────────────────────────────────────────────
             state_options = sorted(metric_snap["state_abbr"].tolist())
             state_labels  = ["— Select a state —"] + state_options
+            # Persist selection across reruns; reset if commodity/metric changed
+            _sel_key = "state_select"
+            if _sel_key not in st.session_state or st.session_state[_sel_key] not in state_labels:
+                st.session_state[_sel_key] = "— Select a state —"
             sel_col, _ = st.columns([1, 3])
             chosen = sel_col.selectbox(
                 "Select State",
                 state_labels,
-                index=0,
+                key=_sel_key,
                 label_visibility="collapsed",
             )
             selected_abbr = None if chosen == "— Select a state —" else chosen
