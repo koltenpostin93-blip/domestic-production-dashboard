@@ -424,14 +424,6 @@ with st.sidebar:
     st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>State Level</p>", unsafe_allow_html=True)
     map_year = st.selectbox("Map Year", list(range(THIS_YEAR, 1999, -1)))
 
-    st.markdown("---")
-    st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>State Trend</p>", unsafe_allow_html=True)
-    trend_metric = st.selectbox("Trend Metric", metric_list, key="trend_m")
-    trend_states = st.multiselect(
-        "States",
-        sorted(STATE_ABBREV.values()),
-        default=["IA", "IL", "NE", "MN", "IN"],
-    )
 
 # ── Header ───────────────────────────────────────────────────────────────────
 icon = COMMODITY_ICONS.get(commodity, "")
@@ -449,9 +441,8 @@ st.markdown(f"""
 
 # ── Load data ────────────────────────────────────────────────────────────────
 with st.spinner("Fetching USDA NASS data..."):
-    nat_df     = load_national(commodity, year_range[0], year_range[1])
-    snap_df    = load_state_snapshot(commodity, map_year)
-    state_hist = load_state_history(commodity, trend_metric, year_range[0], year_range[1]) if trend_states else pd.DataFrame()
+    nat_df  = load_national(commodity, year_range[0], year_range[1])
+    snap_df = load_state_snapshot(commodity, map_year)
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
 tab_nat, tab_state = st.tabs(["  📊  National Overview  ", "  🗺️  State Level  "])
@@ -607,116 +598,147 @@ with tab_nat:
 with tab_state:
     if snap_df.empty:
         st.warning(f"No state data available for {commodity} in {map_year}.")
-        st.stop()
-
-    # ── Metric pill filter ────────────────────────────────────────────────────
-    prod_default = next((m for m in metric_list if "Production" in m), metric_list[0])
-    map_metric = st.radio(
-        "State metric",
-        metric_list,
-        index=metric_list.index(prod_default),
-        horizontal=True,
-        label_visibility="collapsed",
-    )
-    st.markdown("<div style='margin-bottom:12px'></div>", unsafe_allow_html=True)
-
-    metric_snap = snap_df[snap_df["metric"] == map_metric].copy()
-
-    if not metric_snap.empty:
-        # ── Choropleth ───────────────────────────────────────────────────────
-        fig_map = px.choropleth(
-            metric_snap,
-            locations="state_abbr",
-            locationmode="USA-states",
-            color="value",
-            scope="usa",
-            color_continuous_scale=[[0, "#1a2a2c"], [0.4, "#5ba5af"], [1, "#b8dde2"]],
-            hover_name="state_name",
-            hover_data={"value": ":,.0f", "state_abbr": False},
-            labels={"value": map_metric},
-            title=f"{commodity} — {map_metric} by State ({map_year})",
-        )
-        fig_map.update_layout(
-            geo=dict(bgcolor=DARK_BG, lakecolor=DARK_BG, landcolor=DARK_CARD, showlakes=True, showcoastlines=False),
-            plot_bgcolor=DARK_BG, paper_bgcolor=DARK_BG,
-            font=dict(color=WHITE),
-            title_font=dict(size=15, color=WHITE),
-            coloraxis_colorbar=dict(
-                title=dict(text=map_metric, font=dict(color=GRAY, size=11)),
-                tickfont=dict(color=WHITE), bgcolor=DARK_CARD, bordercolor=DARK_ALT,
-            ),
-            height=460,
-            margin=dict(l=0, r=0, t=50, b=0),
-        )
-        st.plotly_chart(fig_map, use_container_width=True)
-
-        # ── Top-15 bar ───────────────────────────────────────────────────────
-        top15 = metric_snap.sort_values("value", ascending=False).head(15)
-        fig_bar = go.Figure(go.Bar(
-            x=top15["state_abbr"], y=top15["value"],
-            marker_color=BLUE,
-            text=top15["value"].apply(lambda v: _bar_label(v, map_metric)),
-            textposition="outside", textfont=dict(color=WHITE, size=11),
-            hovertemplate="<b>%{x}</b><br>" + map_metric + ": %{y:" + _ytick(map_metric) + "}<extra></extra>",
-        ))
-        _base_layout(fig_bar, title=f"Top 15 States — {map_metric} ({map_year})", height=400)
-        fig_bar.update_yaxes(tickformat=_ytick(map_metric))
-        fig_bar.update_layout(showlegend=False)
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-    # ── State historical trend ────────────────────────────────────────────────
-    st.markdown("---")
-    st.markdown(f"<h3 style='color:{WHITE};margin-bottom:4px'>State Historical Trend — {trend_metric}</h3>", unsafe_allow_html=True)
-
-    STATE_COLORS = [BLUE, AMBER, GREEN, RED, "#a78bfa", "#f97316", "#06b6d4", "#ec4899", "#84cc16", "#e879f9"]
-
-    if not trend_states:
-        st.info("Select states in the sidebar to view historical trends.")
-    elif state_hist.empty:
-        st.warning("No state history data returned.")
     else:
-        fig_trend = go.Figure()
-        for i, abbr in enumerate(trend_states):
-            s = state_hist[state_hist["state_abbr"] == abbr].sort_values("year")
-            if s.empty:
-                continue
-            label = s["state_name"].iloc[0].title()
-            fig_trend.add_trace(go.Scatter(
-                x=s["year"], y=s["value"],
-                mode="lines+markers", name=label,
-                line=dict(color=STATE_COLORS[i % len(STATE_COLORS)], width=2),
-                marker=dict(size=4),
-                hovertemplate=f"<b>{label}</b><br>%{{x}}: %{{y:{_ytick(trend_metric)}}}<extra></extra>",
+        # ── Metric pill filter ────────────────────────────────────────────────
+        prod_default = next((m for m in metric_list if "Production" in m), metric_list[0])
+        map_metric = st.radio(
+            "State metric",
+            metric_list,
+            index=metric_list.index(prod_default),
+            horizontal=True,
+            label_visibility="collapsed",
+        )
+        st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+        metric_snap = snap_df[snap_df["metric"] == map_metric].copy()
+
+        if metric_snap.empty:
+            st.warning(f"No state data for {map_metric} in {map_year}.")
+        else:
+            # ── Choropleth ───────────────────────────────────────────────────
+            fig_map = px.choropleth(
+                metric_snap,
+                locations="state_abbr",
+                locationmode="USA-states",
+                color="value",
+                scope="usa",
+                color_continuous_scale=[[0, "#1a2a2c"], [0.4, "#5ba5af"], [1, "#b8dde2"]],
+                hover_name="state_name",
+                hover_data={"value": ":,.0f", "state_abbr": False},
+                custom_data=["state_abbr", "state_name"],
+                labels={"value": map_metric},
+                title=f"{commodity} — {map_metric} by State ({map_year})",
+            )
+            fig_map.update_layout(
+                geo=dict(bgcolor=DARK_BG, lakecolor=DARK_BG, landcolor=DARK_CARD,
+                         showlakes=True, showcoastlines=False),
+                plot_bgcolor=DARK_BG, paper_bgcolor=DARK_BG,
+                font=dict(color=WHITE),
+                title_font=dict(size=15, color=WHITE),
+                coloraxis_colorbar=dict(
+                    title=dict(text=map_metric, font=dict(color=GRAY, size=11)),
+                    tickfont=dict(color=WHITE), bgcolor=DARK_CARD, bordercolor=DARK_ALT,
+                ),
+                height=460,
+                margin=dict(l=0, r=0, t=50, b=0),
+                clickmode="event+select",
+            )
+
+            map_event = st.plotly_chart(
+                fig_map,
+                use_container_width=True,
+                on_select="rerun",
+                key=f"choropleth_{commodity}_{map_year}_{map_metric}",
+            )
+
+            # ── Resolve clicked state ─────────────────────────────────────────
+            selected_abbr = None
+            selected_name = None
+            pts = (map_event.selection.points if map_event and map_event.selection else [])
+            if pts:
+                cd = pts[0].get("customdata")
+                if cd and len(cd) >= 2:
+                    selected_abbr = cd[0]
+                    selected_name = cd[1].title()
+
+            # ── Top-15 bar ───────────────────────────────────────────────────
+            top15 = metric_snap.sort_values("value", ascending=False).head(15)
+            bar_colors = [
+                TEAL if row["state_abbr"] == selected_abbr else "#4a7a82"
+                for _, row in top15.iterrows()
+            ]
+            fig_bar = go.Figure(go.Bar(
+                x=top15["state_abbr"],
+                y=top15["value"],
+                marker_color=bar_colors,
+                text=top15["value"].apply(lambda v: _bar_label(v, map_metric)),
+                textposition="outside",
+                textfont=dict(color=WHITE, size=11),
+                hovertemplate="<b>%{x}</b><br>" + map_metric + ": %{y:" + _ytick(map_metric) + "}<extra></extra>",
             ))
-        _base_layout(fig_trend, title=f"{commodity} {trend_metric} — {', '.join(trend_states)}", height=430)
-        fig_trend.update_yaxes(tickformat=_ytick(trend_metric))
-        st.plotly_chart(fig_trend, use_container_width=True)
+            _base_layout(fig_bar, title=f"Top 15 States — {map_metric} ({map_year})", height=400)
+            fig_bar.update_yaxes(tickformat=_ytick(map_metric))
+            fig_bar.update_layout(showlegend=False)
+            st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{commodity}_{map_year}_{map_metric}")
 
-    # ── State vs National comparison ─────────────────────────────────────────
-    if trend_states and not state_hist.empty:
-        st.markdown(f"<h3 style='color:{WHITE};margin-bottom:4px'>State vs. U.S. — {trend_metric}</h3>", unsafe_allow_html=True)
+            # ── State historical section ──────────────────────────────────────
+            st.markdown("---")
+            if selected_abbr is None:
+                st.markdown(
+                    f"<div style='background:{DARK_CARD};border-radius:8px;padding:28px;text-align:center;"
+                    f"color:{GRAY};font-size:15px;border:1px dashed #4a5568;'>"
+                    f"🗺️ &nbsp; Click a state on the map to view its historical trend"
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"<h3 style='color:{WHITE};margin-bottom:4px'>"
+                    f"{selected_name} — Historical {map_metric}</h3>",
+                    unsafe_allow_html=True,
+                )
 
-        nat_metric = nat_df[nat_df["metric"] == trend_metric][["year", "value"]].rename(columns={"value": "national"})
+                with st.spinner(f"Loading {selected_name} history..."):
+                    s_hist = load_state_history(commodity, map_metric, year_range[0], year_range[1])
 
-        fig_vs = go.Figure()
-        fig_vs.add_trace(go.Scatter(
-            x=nat_metric["year"], y=nat_metric["national"],
-            mode="lines", name="U.S.",
-            line=dict(color=WHITE, width=2, dash="dot"),
-            hovertemplate="<b>U.S.</b><br>%{x}: %{y:" + _ytick(trend_metric) + "}<extra></extra>",
-        ))
-        for i, abbr in enumerate(trend_states):
-            s = state_hist[state_hist["state_abbr"] == abbr].sort_values("year")
-            if s.empty:
-                continue
-            label = s["state_name"].iloc[0].title()
-            fig_vs.add_trace(go.Scatter(
-                x=s["year"], y=s["value"],
-                mode="lines+markers", name=label,
-                line=dict(color=STATE_COLORS[i % len(STATE_COLORS)], width=2),
-                marker=dict(size=4),
-                hovertemplate=f"<b>{label}</b><br>%{{x}}: %{{y:{_ytick(trend_metric)}}}<extra></extra>",
-            ))
-        _base_layout(fig_vs, title="", height=410)
-        fig_vs.update_yaxes(tickformat=_ytick(trend_metric))
-        st.plotly_chart(fig_vs, use_container_width=True)
+                s_data = s_hist[s_hist["state_abbr"] == selected_abbr].sort_values("year")
+                nat_data = nat_df[nat_df["metric"] == map_metric][["year", "value"]].sort_values("year")
+
+                if s_data.empty:
+                    st.warning(f"No historical data found for {selected_name}.")
+                else:
+                    col_l, col_r = st.columns(2, gap="medium")
+
+                    # State trend
+                    fig_st = go.Figure()
+                    fig_st.add_trace(go.Scatter(
+                        x=s_data["year"], y=s_data["value"],
+                        mode="lines+markers",
+                        line=dict(color=TEAL, width=2.5),
+                        marker=dict(size=5),
+                        fill="tozeroy", fillcolor="rgba(91,165,175,0.12)",
+                        name=selected_name,
+                        hovertemplate=f"<b>%{{x}}</b><br>{map_metric}: %{{y:{_ytick(map_metric)}}}<extra></extra>",
+                    ))
+                    _base_layout(fig_st, title=f"{selected_name} — {map_metric}", height=380)
+                    fig_st.update_yaxes(tickformat=_ytick(map_metric))
+                    col_l.plotly_chart(fig_st, use_container_width=True)
+
+                    # State vs US
+                    fig_vs = go.Figure()
+                    fig_vs.add_trace(go.Scatter(
+                        x=nat_data["year"], y=nat_data["value"],
+                        mode="lines", name="U.S. Total",
+                        line=dict(color=WHITE, width=2, dash="dot"),
+                        hovertemplate="<b>U.S.</b><br>%{x}: %{y:" + _ytick(map_metric) + "}<extra></extra>",
+                    ))
+                    fig_vs.add_trace(go.Scatter(
+                        x=s_data["year"], y=s_data["value"],
+                        mode="lines+markers", name=selected_name,
+                        line=dict(color=TEAL, width=2.5),
+                        marker=dict(size=5),
+                        hovertemplate=f"<b>{selected_name}</b><br>%{{x}}: %{{y:{_ytick(map_metric)}}}<extra></extra>",
+                    ))
+                    _base_layout(fig_vs, title=f"{selected_name} vs. U.S. — {map_metric}", height=380)
+                    fig_vs.update_yaxes(tickformat=_ytick(map_metric))
+                    col_r.plotly_chart(fig_vs, use_container_width=True)
