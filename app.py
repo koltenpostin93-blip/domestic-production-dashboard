@@ -662,7 +662,13 @@ with tab_state:
                 dragmode=False,
             )
             # White state borders
-            fig_map.update_traces(marker_line_color="white", marker_line_width=0.6)
+            fig_map.update_traces(
+                selector=dict(type="choropleth"),
+                marker_line_color="white",
+                marker_line_width=0.6,
+                hovertemplate="<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
+                              + map_metric + ": %{z:,.0f}<extra></extra>",
+            )
 
             # State value labels via scattergeo
             lbl_lats, lbl_lons, lbl_texts = [], [], []
@@ -677,6 +683,7 @@ with tab_state:
                 mode="text",
                 textfont=dict(color=WHITE, size=8, family="Open Sans"),
                 showlegend=False,
+                hoverinfo="skip",
             ))
 
             # Map is the filter — click a state to select it
