@@ -324,11 +324,11 @@ def _bar_label(v: float, metric: str) -> str:
     if "Production" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bu" in unit:
-            return f"{v/1_000_000:.1f}M Bu"
+            return f"{v/1_000_000:.0f}M Bu"
         elif "Lb" in unit:
-            return f"{v/1_000_000:.1f}M Lbs"
+            return f"{v/1_000_000:.0f}M Lbs"
         elif "Ton" in unit:
-            return f"{v/1_000_000:.1f}M Tons"
+            return f"{v/1_000_000:.0f}M Tons"
         elif "Bales" in unit:
             return f"{v/1_000:.0f}K Bales"
     return _fmt(v, metric)
@@ -678,24 +678,42 @@ with tab_state:
                 showlegend=False,
             ))
 
-            st.plotly_chart(fig_map, use_container_width=True)
-
-            # ── State selector ────────────────────────────────────────────────
-            state_options = sorted(metric_snap["state_abbr"].tolist())
-            state_labels  = ["— Select a state —"] + state_options
-            # Persist selection across reruns; reset if commodity/metric changed
-            _sel_key = "state_select"
-            if _sel_key not in st.session_state or st.session_state[_sel_key] not in state_labels:
-                st.session_state[_sel_key] = "— Select a state —"
-            sel_col, _ = st.columns([1, 3])
-            chosen = sel_col.selectbox(
-                "Select State",
-                state_labels,
-                key=_sel_key,
-                label_visibility="collapsed",
+            # Map is the filter — click a state to select it
+            map_event = st.plotly_chart(
+                fig_map,
+                use_container_width=True,
+                on_select="rerun",
+                key=f"map_{commodity}_{map_year}_{map_metric}",
             )
-            selected_abbr = None if chosen == "— Select a state —" else chosen
+
+            # ── Resolve selected state from click event ───────────────────────
+            valid_abbrs = set(metric_snap["state_abbr"].tolist())
+
+            if map_event and map_event.selection and map_event.selection.points:
+                pt  = map_event.selection.points[0]
+                cd  = pt.get("customdata") or []
+                abbr_from_click = cd[0] if len(cd) >= 1 else pt.get("location")
+                if abbr_from_click in valid_abbrs:
+                    st.session_state["sel_state"] = abbr_from_click
+
+            # Validate persisted selection is still in current data
+            persisted = st.session_state.get("sel_state")
+            if persisted not in valid_abbrs:
+                persisted = None
+                st.session_state["sel_state"] = None
+
+            selected_abbr = persisted
             selected_name = ABBREV_STATE.get(selected_abbr, "").title() if selected_abbr else None
+
+            # Clear button
+            c1, c2 = st.columns([1, 5])
+            if selected_abbr:
+                c1.caption(f"Selected: **{selected_abbr}**")
+                if c2.button("✕ Clear", key="clear_state"):
+                    st.session_state["sel_state"] = None
+                    st.rerun()
+            else:
+                c1.caption("Click a state on the map")
 
             # ── Top-15 bar ───────────────────────────────────────────────────
             top15 = metric_snap.sort_values("value", ascending=False).head(15)
