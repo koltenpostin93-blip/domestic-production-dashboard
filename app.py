@@ -347,13 +347,14 @@ def _bar_label(v: float, metric: str) -> str:
     return _fmt(v, metric)
 
 def _tbl_num(v, metric) -> str:
-    """Table cell: scaled whole number, no unit suffix."""
+    """Table cell: scaled number, no unit suffix.
+    Yield and Acres → 1 decimal; Production → whole number."""
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "—"
     if "Yield" in metric:
-        return f"{round(v):,}"
+        return f"{v:.1f}"
     if "Acres" in metric:
-        return f"{round(v / 1_000_000):,}"
+        return f"{v / 1_000_000:.1f}"
     if "Production" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         return f"{round(v / 1_000):,}" if "Bales" in unit else f"{round(v / 1_000_000):,}"
@@ -879,6 +880,24 @@ with tab_state:
                     row["pct_of_avg"] = (cur_v / olym * 100) if (cur_v and olym) else None
                     return row
 
+                # For yield metrics load harvested acres so subtotals can be
+                # weighted averages (Σ yield×acres / Σ acres) instead of sums
+                is_yield = "Yield" in map_metric
+                harv_yr_vals: dict = {}
+                if is_yield:
+                    harv_metric = next(
+                        (m for m in COMMODITIES[commodity] if "Harvested" in m), None
+                    )
+                    if harv_metric:
+                        with st.spinner("Loading harvested acres for yield weighting..."):
+                            tbl_harv = load_state_history(commodity, harv_metric, tbl_y0, map_year)
+                        if not tbl_harv.empty and "state_abbr" in tbl_harv.columns:
+                            for abbr in all_abbrs:
+                                hdf = tbl_harv[tbl_harv["state_abbr"] == abbr]
+                                harv_yr_vals[abbr] = {
+                                    int(r["year"]): r["value"] for _, r in hdf.iterrows()
+                                }
+
                 # Build all rows
                 tbl_rows = []
                 for g_idx, grp in enumerate(STATE_TABLE_GROUPS):
@@ -887,9 +906,20 @@ with tab_state:
                     if grp["subtotal"]:
                         sub_yr = {}
                         for yr in tbl_years_list:
-                            vals  = [state_yr_vals.get(a, {}).get(yr) for a in grp["states"]]
-                            valid = [v for v in vals if v is not None]
-                            sub_yr[yr] = sum(valid) if valid else None
+                            if is_yield and harv_yr_vals:
+                                # Weighted average: Σ(yield_i × harv_acres_i) / Σ harv_acres_i
+                                numer = denom = 0.0
+                                for a in grp["states"]:
+                                    y = state_yr_vals.get(a, {}).get(yr)
+                                    h = harv_yr_vals.get(a, {}).get(yr)
+                                    if y is not None and h is not None and h > 0:
+                                        numer += y * h
+                                        denom += h
+                                sub_yr[yr] = (numer / denom) if denom > 0 else None
+                            else:
+                                vals  = [state_yr_vals.get(a, {}).get(yr) for a in grp["states"]]
+                                valid = [v for v in vals if v is not None]
+                                sub_yr[yr] = sum(valid) if valid else None
                         tbl_rows.append(_build_row(grp["subtotal"], sub_yr, "subtotal"))
                     if g_idx < len(STATE_TABLE_GROUPS) - 1:
                         tbl_rows.append({"row_type": "spacer"})
