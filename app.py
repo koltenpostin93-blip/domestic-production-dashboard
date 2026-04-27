@@ -131,6 +131,17 @@ COMMODITIES = {
 LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 LOGO_FULL  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
 
+# ── State comparison table structure ─────────────────────────────────────────
+# Each group renders individual state rows → subtotal row → spacer row.
+# Groups without a subtotal key still get a spacer except the last one.
+STATE_TABLE_GROUPS = [
+    {"states": ["IL", "IN", "OH", "MI", "KY"], "subtotal": "Eastern Corn Belt Total"},
+    {"states": ["IA", "NE", "KS"],              "subtotal": "UP States"},
+    {"states": ["MN", "SD", "ND"],              "subtotal": "BN States"},
+    {"states": ["MS", "AR", "LA", "TN"],        "subtotal": "Delta Total"},
+    {"states": ["WI", "MO", "TX"],              "subtotal": None},   # no subtotal; US Total follows
+]
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Domestic Production | JSA",
@@ -327,6 +338,14 @@ def _bar_label(v: float, metric: str) -> str:
         elif "Bales" in unit:
             return f"{v/1_000:.0f}K Bales"
     return _fmt(v, metric)
+
+def _olympic6(vals):
+    """6-year olympic average: remove highest & lowest, average the rest.
+    Accepts up to 6 values (or however many are non-null); needs ≥3 to compute."""
+    clean = sorted(v for v in vals if v is not None and not pd.isna(v))
+    if len(clean) < 3:
+        return None
+    return sum(clean[1:-1]) / len(clean[1:-1])
 
 # ── Data loaders ─────────────────────────────────────────────────────────────
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -759,6 +778,176 @@ with tab_state:
             fig_bar.update_yaxes(tickformat=_ytick(map_metric))
             fig_bar.update_layout(showlegend=False)
             st.plotly_chart(fig_bar, use_container_width=True)
+
+            # ── 10-Year State Comparison Table ────────────────────────────────
+            st.markdown(
+                f"<p style='color:{GRAY};font-size:12px;font-weight:700;text-transform:uppercase;"
+                f"letter-spacing:.06em;margin:20px 0 6px'>10-Year State Comparison — {map_metric}</p>",
+                unsafe_allow_html=True,
+            )
+
+            tbl_y0         = map_year - 9
+            tbl_years_list = list(range(tbl_y0, map_year + 1))
+
+            with st.spinner("Loading comparison table..."):
+                tbl_shist   = load_state_history(commodity, map_metric, tbl_y0, map_year)
+                tbl_nathist = load_national(commodity, tbl_y0, map_year)
+
+            # National value by year
+            nat_yr_vals = (
+                tbl_nathist[tbl_nathist["metric"] == map_metric]
+                .set_index("year")["value"].to_dict()
+            )
+            nat_recent6  = [nat_yr_vals.get(yr) for yr in tbl_years_list[-6:]]
+            nat_olym_val = _olympic6(nat_recent6)
+
+            # Per-state year→value lookups
+            all_abbrs = [a for grp in STATE_TABLE_GROUPS for a in grp["states"]]
+            state_yr_vals = {}
+            for abbr in all_abbrs:
+                sdf = tbl_shist[tbl_shist["state_abbr"] == abbr]
+                state_yr_vals[abbr] = {int(r["year"]): r["value"] for _, r in sdf.iterrows()}
+
+            def _build_row(label, yr_map, row_type="state"):
+                row = {"label": label, "row_type": row_type}
+                all_vals = []
+                for yr in tbl_years_list:
+                    v = yr_map.get(yr)
+                    row[yr] = v
+                    if v is not None:
+                        all_vals.append(v)
+                recent6  = [yr_map.get(yr) for yr in tbl_years_list[-6:]]
+                olym     = _olympic6(recent6)
+                row["olym"]    = olym
+                row["min_val"] = min(all_vals) if all_vals else None
+                row["max_val"] = max(all_vals) if all_vals else None
+                row["pct_us"]  = (olym / nat_olym_val * 100) if (olym and nat_olym_val) else None
+                return row
+
+            # Build all rows
+            tbl_rows = []
+            for g_idx, grp in enumerate(STATE_TABLE_GROUPS):
+                for abbr in grp["states"]:
+                    tbl_rows.append(_build_row(abbr, state_yr_vals.get(abbr, {}), "state"))
+                if grp["subtotal"]:
+                    sub_yr = {}
+                    for yr in tbl_years_list:
+                        vals = [state_yr_vals.get(a, {}).get(yr) for a in grp["states"]]
+                        valid = [v for v in vals if v is not None]
+                        sub_yr[yr] = sum(valid) if valid else None
+                    tbl_rows.append(_build_row(grp["subtotal"], sub_yr, "subtotal"))
+                # spacer between groups (not after the last one)
+                if g_idx < len(STATE_TABLE_GROUPS) - 1:
+                    tbl_rows.append({"row_type": "spacer"})
+
+            # US Total
+            us_yr_map = {yr: nat_yr_vals.get(yr) for yr in tbl_years_list}
+            tbl_rows.append(_build_row("US Total", us_yr_map, "us"))
+
+            # ── Render HTML table ─────────────────────────────────────────────
+            def _tc(v, metric, pct=False):
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    return "—"
+                if pct:
+                    return f"{v:.1f}%"
+                return _bar_label(v, metric)
+
+            # Header style tokens
+            _TH  = (f"padding:7px 9px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
+                    f"font-weight:700;font-size:11px;white-space:nowrap;border-bottom:2px solid {TEAL};")
+            _TH0 = (f"padding:7px 10px;text-align:left;background:{TEAL_DIM};color:{WHITE};"
+                    f"font-weight:700;font-size:11px;border-bottom:2px solid {TEAL};")
+            _THS = (f"padding:7px 10px;text-align:right;background:{DARK_ALT};color:{TEAL};"
+                    f"font-weight:700;font-size:11px;white-space:nowrap;"
+                    f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
+            _THP = (f"padding:7px 10px;text-align:right;background:{DARK_ALT};color:{AMBER};"
+                    f"font-weight:700;font-size:11px;white-space:nowrap;"
+                    f"border-bottom:2px solid {TEAL};border-left:1px solid #4a5568;")
+
+            yr_hdrs = "".join(f"<th style='{_TH}'>{yr}</th>" for yr in tbl_years_list)
+            thead_html = (
+                f"<thead><tr>"
+                f"<th style='{_TH0}'>State / Region</th>"
+                f"{yr_hdrs}"
+                f"<th style='{_THS}'>6-Yr Olympic Avg</th>"
+                f"<th style='{_THS}'>Min</th>"
+                f"<th style='{_THS}'>Max</th>"
+                f"<th style='{_THP}'>% of U.S.</th>"
+                f"</tr></thead>"
+            )
+
+            tbody_html = ""
+            row_idx    = 0
+            for row in tbl_rows:
+                rtype = row.get("row_type")
+                if rtype == "spacer":
+                    colspan = 1 + len(tbl_years_list) + 4
+                    tbody_html += (
+                        f"<tr><td colspan='{colspan}' "
+                        f"style='height:9px;background:{DARK_BG};'></td></tr>"
+                    )
+                    continue
+
+                if rtype == "us":
+                    bg     = "#1b2e30"
+                    c_lbl  = TEAL
+                    c_num  = WHITE
+                    c_sp   = TEAL
+                    c_pct  = AMBER
+                    fw_lbl = "700"
+                    fs_lbl = "13px"
+                    border_top = f"border-top:2px solid {TEAL};"
+                elif rtype == "subtotal":
+                    bg     = DARK_ALT
+                    c_lbl  = TEAL
+                    c_num  = TEAL
+                    c_sp   = TEAL
+                    c_pct  = AMBER
+                    fw_lbl = "700"
+                    fs_lbl = "12px"
+                    border_top = f"border-top:1px solid {TEAL_DIM};"
+                else:
+                    bg     = DARK_CARD if row_idx % 2 == 0 else "#302e2e"
+                    c_lbl  = WHITE
+                    c_num  = GRAY
+                    c_sp   = WHITE
+                    c_pct  = AMBER
+                    fw_lbl = "400"
+                    fs_lbl = "12px"
+                    border_top = ""
+                    row_idx += 1
+
+                td_lbl = (f"padding:7px 10px;text-align:left;background:{bg};color:{c_lbl};"
+                          f"font-weight:{fw_lbl};font-size:{fs_lbl};{border_top}")
+                td_num = (f"padding:6px 9px;text-align:right;background:{bg};color:{c_num};"
+                          f"font-size:12px;{border_top}")
+                td_sp  = (f"padding:6px 10px;text-align:right;background:{bg};color:{c_sp};"
+                          f"font-weight:600;font-size:12px;border-left:2px solid #4a5568;{border_top}")
+                td_pct = (f"padding:6px 10px;text-align:right;background:{bg};color:{c_pct};"
+                          f"font-weight:700;font-size:12px;border-left:1px solid #4a5568;{border_top}")
+
+                yr_cells = "".join(
+                    f"<td style='{td_num}'>{_tc(row.get(yr), map_metric)}</td>"
+                    for yr in tbl_years_list
+                )
+                tbody_html += (
+                    f"<tr>"
+                    f"<td style='{td_lbl}'>{row['label']}</td>"
+                    f"{yr_cells}"
+                    f"<td style='{td_sp}'>{_tc(row.get('olym'),    map_metric)}</td>"
+                    f"<td style='{td_sp}'>{_tc(row.get('min_val'), map_metric)}</td>"
+                    f"<td style='{td_sp}'>{_tc(row.get('max_val'), map_metric)}</td>"
+                    f"<td style='{td_pct}'>{_tc(row.get('pct_us'), map_metric, pct=True)}</td>"
+                    f"</tr>"
+                )
+
+            st.markdown(
+                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;"
+                f"margin-bottom:20px;'>"
+                f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif;'>"
+                f"{thead_html}<tbody>{tbody_html}</tbody></table></div>",
+                unsafe_allow_html=True,
+            )
 
             # ── State historical section ──────────────────────────────────────
             st.markdown("---")
