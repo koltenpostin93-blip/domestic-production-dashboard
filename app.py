@@ -346,6 +346,33 @@ def _bar_label(v: float, metric: str) -> str:
             return f"{v/1_000:.0f}K Bales"
     return _fmt(v, metric)
 
+def _tbl_num(v, metric) -> str:
+    """Table cell: scaled number only, no unit suffix."""
+    if v is None or (isinstance(v, float) and pd.isna(v)):
+        return "—"
+    if "Yield" in metric:
+        return f"{v:.1f}"
+    if "Acres" in metric:
+        return f"{v / 1_000_000:.1f}"
+    if "Production" in metric:
+        unit = metric.split("(")[-1].replace(")", "").strip()
+        return f"{v / 1_000:.1f}" if "Bales" in unit else f"{v / 1_000_000:.1f}"
+    return f"{v:,.0f}"
+
+def _tbl_unit(metric) -> str:
+    """Human-readable unit label for table title parenthetical."""
+    if "Yield" in metric:
+        return metric.split("(")[-1].replace(")", "").strip()
+    if "Acres" in metric:
+        return "Million Acres"
+    if "Production" in metric:
+        unit = metric.split("(")[-1].replace(")", "").strip()
+        if "Bales" in unit:   return "Thousand Bales"
+        if "Bu"   in unit:   return "Million Bushels"
+        if "Ton"  in unit:   return "Million Tons"
+        if "Lb"   in unit:   return "Million Lbs"
+    return ""
+
 def _olympic6(vals):
     """6-year olympic average: remove highest & lowest, average the rest.
     Accepts up to 6 values (or however many are non-null); needs ≥3 to compute."""
@@ -787,9 +814,12 @@ with tab_state:
             st.plotly_chart(fig_bar, use_container_width=True)
 
             # ── 10-Year State Comparison Table ────────────────────────────────
+            tbl_unit_lbl = _tbl_unit(map_metric)
+            tbl_unit_sfx = f" <span style='color:{TEAL};font-weight:400;text-transform:none;letter-spacing:0'>({tbl_unit_lbl})</span>" if tbl_unit_lbl else ""
             st.markdown(
                 f"<p style='color:{GRAY};font-size:12px;font-weight:700;text-transform:uppercase;"
-                f"letter-spacing:.06em;margin:20px 0 6px'>10-Year State Comparison — {map_metric}</p>",
+                f"letter-spacing:.06em;margin:20px 0 6px'>"
+                f"10-Year State Comparison — {map_metric}{tbl_unit_sfx}</p>",
                 unsafe_allow_html=True,
             )
 
@@ -862,13 +892,6 @@ with tab_state:
                 tbl_rows.append(_build_row("US Total", us_yr_map, "us"))
 
                 # ── Render HTML table ─────────────────────────────────────────
-                def _tc(v, metric, pct=False):
-                    if v is None or (isinstance(v, float) and pd.isna(v)):
-                        return "—"
-                    if pct:
-                        return f"{v:.1f}%"
-                    return _bar_label(v, metric)
-
                 _TH  = (f"padding:7px 9px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
                         f"font-weight:700;font-size:11px;white-space:nowrap;border-bottom:2px solid {TEAL};")
                 _TH0 = (f"padding:7px 10px;text-align:left;background:{TEAL_DIM};color:{WHITE};"
@@ -904,6 +927,7 @@ with tab_state:
                         )
                         continue
 
+                    # Row base styles
                     if rtype == "us":
                         bg = "#1b2e30"; c_lbl = TEAL; c_num = WHITE; c_sp = TEAL
                         c_pct = AMBER; fw_lbl = "700"; fs_lbl = "13px"
@@ -918,27 +942,53 @@ with tab_state:
                         fw_lbl = "400"; fs_lbl = "12px"; border_top = ""
                         row_idx += 1
 
+                    # Per-row top2 / bottom2 for conditional formatting
+                    yr_pairs = [(yr, row[yr]) for yr in tbl_years_list
+                                if row.get(yr) is not None]
+                    sorted_vals = sorted(yr_pairs, key=lambda x: x[1])
+                    bottom2_yrs = {yr for yr, _ in sorted_vals[:2]}  if len(sorted_vals) >= 2 else set()
+                    top2_yrs    = {yr for yr, _ in sorted_vals[-2:]} if len(sorted_vals) >= 2 else set()
+
                     td_lbl = (f"padding:7px 10px;text-align:left;background:{bg};color:{c_lbl};"
                               f"font-weight:{fw_lbl};font-size:{fs_lbl};{border_top}")
-                    td_num = (f"padding:6px 9px;text-align:right;background:{bg};color:{c_num};"
-                              f"font-size:12px;{border_top}")
                     td_sp  = (f"padding:6px 10px;text-align:right;background:{bg};color:{c_sp};"
                               f"font-weight:600;font-size:12px;border-left:2px solid #4a5568;{border_top}")
                     td_pct = (f"padding:6px 10px;text-align:right;background:{bg};color:{c_pct};"
                               f"font-weight:700;font-size:12px;border-left:1px solid #4a5568;{border_top}")
 
-                    yr_cells = "".join(
-                        f"<td style='{td_num}'>{_tc(row.get(yr), map_metric)}</td>"
-                        for yr in tbl_years_list
-                    )
+                    # Year cells with conditional highlighting
+                    yr_cells = ""
+                    for yr in tbl_years_list:
+                        v = row.get(yr)
+                        if yr in top2_yrs and v is not None:
+                            cell_bg  = "rgba(34,197,94,0.18)"
+                            cell_clr = "#4ade80"
+                            cell_fw  = "700"
+                        elif yr in bottom2_yrs and v is not None:
+                            cell_bg  = "rgba(239,68,68,0.18)"
+                            cell_clr = "#f87171"
+                            cell_fw  = "700"
+                        else:
+                            cell_bg  = bg
+                            cell_clr = c_num
+                            cell_fw  = "400"
+                        yr_cells += (
+                            f"<td style='padding:6px 9px;text-align:right;"
+                            f"background:{cell_bg};color:{cell_clr};"
+                            f"font-weight:{cell_fw};font-size:12px;{border_top}'>"
+                            f"{_tbl_num(v, map_metric)}</td>"
+                        )
+
+                    pct_val    = row.get("pct_us")
+                    pct_str    = "—" if pct_val is None else f"{pct_val:.1f}%"
                     tbody_html += (
                         f"<tr>"
                         f"<td style='{td_lbl}'>{row['label']}</td>"
                         f"{yr_cells}"
-                        f"<td style='{td_sp}'>{_tc(row.get('olym'),    map_metric)}</td>"
-                        f"<td style='{td_sp}'>{_tc(row.get('min_val'), map_metric)}</td>"
-                        f"<td style='{td_sp}'>{_tc(row.get('max_val'), map_metric)}</td>"
-                        f"<td style='{td_pct}'>{_tc(row.get('pct_us'), map_metric, pct=True)}</td>"
+                        f"<td style='{td_sp}'>{_tbl_num(row.get('olym'),    map_metric)}</td>"
+                        f"<td style='{td_sp}'>{_tbl_num(row.get('min_val'), map_metric)}</td>"
+                        f"<td style='{td_sp}'>{_tbl_num(row.get('max_val'), map_metric)}</td>"
+                        f"<td style='{td_pct}'>{pct_str}</td>"
                         f"</tr>"
                     )
 
