@@ -293,13 +293,20 @@ st.markdown(f"""
 @st.cache_data(ttl=3600, show_spinner=False)
 def _fetch(params: dict) -> pd.DataFrame:
     p = {**params, "key": API_KEY, "format": "JSON"}
-    try:
-        r = requests.get(BASE_URL, params=p, timeout=30)
-        d = r.json()
-        return pd.DataFrame(d.get("data", []))
-    except Exception as e:
-        st.error(f"NASS API error: {e}")
-        return pd.DataFrame()
+    for attempt in range(2):
+        try:
+            r = requests.get(BASE_URL, params=p, timeout=60)
+            d = r.json()
+            return pd.DataFrame(d.get("data", []))
+        except requests.exceptions.Timeout:
+            if attempt == 0:
+                continue   # one automatic retry
+            st.warning("NASS API timed out after two attempts. Try refreshing in a moment.")
+            return pd.DataFrame()
+        except Exception as e:
+            st.error(f"NASS API error: {e}")
+            return pd.DataFrame()
+    return pd.DataFrame()
 
 def _clean(val) -> float | None:
     try:
@@ -790,12 +797,14 @@ with tab_state:
             tbl_years_list = list(range(tbl_y0, map_year + 1))
 
             with st.spinner("Loading comparison table..."):
-                tbl_shist   = load_state_history(commodity, map_metric, tbl_y0, map_year)
-                tbl_nathist = load_national(commodity, tbl_y0, map_year)
+                tbl_shist = load_state_history(commodity, map_metric, tbl_y0, map_year)
 
-            # National value by year
+            # National values — reuse the already-fetched nat_df (no extra API call)
             nat_yr_vals = (
-                tbl_nathist[tbl_nathist["metric"] == map_metric]
+                nat_df[
+                    (nat_df["metric"] == map_metric) &
+                    (nat_df["year"].between(tbl_y0, map_year))
+                ]
                 .set_index("year")["value"].to_dict()
             )
             nat_recent6  = [nat_yr_vals.get(yr) for yr in tbl_years_list[-6:]]
