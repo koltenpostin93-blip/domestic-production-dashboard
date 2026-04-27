@@ -347,17 +347,17 @@ def _bar_label(v: float, metric: str) -> str:
     return _fmt(v, metric)
 
 def _tbl_num(v, metric) -> str:
-    """Table cell: scaled number only, no unit suffix."""
+    """Table cell: scaled whole number, no unit suffix."""
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "—"
     if "Yield" in metric:
-        return f"{v:.1f}"
+        return f"{round(v):,}"
     if "Acres" in metric:
-        return f"{v / 1_000_000:.1f}"
+        return f"{round(v / 1_000_000):,}"
     if "Production" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
-        return f"{v / 1_000:.1f}" if "Bales" in unit else f"{v / 1_000_000:.1f}"
-    return f"{v:,.0f}"
+        return f"{round(v / 1_000):,}" if "Bales" in unit else f"{round(v / 1_000_000):,}"
+    return f"{round(v):,}"
 
 def _tbl_unit(metric) -> str:
     """Human-readable unit label for table title parenthetical."""
@@ -1011,10 +1011,20 @@ with tab_state:
                               f"color:{chg_clr};font-weight:700;font-size:12px;"
                               f"border-left:2px solid #4a5568;{border_top}")
 
-                    poa_val   = row.get("pct_of_avg")
-                    poa_str   = "—" if poa_val is None else f"{poa_val:.1f}%"
-                    pct_val   = row.get("pct_us")
-                    pct_str   = "—" if pct_val is None else f"{pct_val:.1f}%"
+                    # % of Avg — ▲/▼ showing deviation from 100% (same style as % vs LY)
+                    poa_val = row.get("pct_of_avg")
+                    if poa_val is None:
+                        poa_str = "—"; poa_clr = GRAY; poa_bg = bg
+                    elif poa_val >= 100:
+                        poa_str = f"▲ {poa_val - 100:.1f}%"; poa_clr = "#4ade80"; poa_bg = "rgba(34,197,94,0.12)"
+                    else:
+                        poa_str = f"▼ {100 - poa_val:.1f}%"; poa_clr = "#f87171"; poa_bg = "rgba(239,68,68,0.12)"
+                    td_poa = (f"padding:6px 9px;text-align:right;background:{poa_bg};"
+                              f"color:{poa_clr};font-weight:700;font-size:12px;"
+                              f"border-left:1px solid #4a5568;{border_top}")
+
+                    pct_val = row.get("pct_us")
+                    pct_str = "—" if pct_val is None else f"{pct_val:.1f}%"
 
                     tbody_html += (
                         f"<tr>"
@@ -1022,7 +1032,7 @@ with tab_state:
                         f"{yr_cells}"
                         f"<td style='{td_chg}'>{chg_str}</td>"
                         f"<td style='{td_sp}'>{_tbl_num(row.get('olym'),    map_metric)}</td>"
-                        f"<td style='{td_pct}'>{poa_str}</td>"
+                        f"<td style='{td_poa}'>{poa_str}</td>"
                         f"<td style='{td_sp}'>{_tbl_num(row.get('min_val'), map_metric)}</td>"
                         f"<td style='{td_sp}'>{_tbl_num(row.get('max_val'), map_metric)}</td>"
                         f"<td style='{td_pct}'>{pct_str}</td>"
