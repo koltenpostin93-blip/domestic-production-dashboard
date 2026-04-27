@@ -127,11 +127,6 @@ COMMODITIES = {
     },
 }
 
-COMMODITY_ICONS = {
-    "Corn": "🌽", "Soybeans": "🫘", "Wheat": "🌾", "Cotton": "🪴", "Sorghum": "🌿",
-    "Barley": "🫚", "Canola": "🌼", "Sugarbeets": "🟤", "Peanuts": "🥜",
-    "Hay": "🌱", "Sunflower": "🌻",
-}
 
 LOGO_WHITE = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
 LOGO_FULL  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.png"
@@ -358,13 +353,24 @@ def load_national(commodity: str, y0: int, y1: int) -> pd.DataFrame:
         frames.append(df)
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
+PERIOD_PRIORITY = [
+    "YEAR",
+    "YEAR - NOV FORECAST",
+    "YEAR - SEP FORECAST",
+    "YEAR - AUG FORECAST",
+    "YEAR - JUN ACREAGE",
+    "YEAR - JUL FORECAST",
+]
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_state_snapshot(commodity: str, year: int) -> pd.DataFrame:
     params_map = COMMODITIES[commodity]
     frames = []
     for label, mp in params_map.items():
+        # Strip reference_period so we get all periods, then pick the best per state
+        base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
         df = _fetch({
-            **mp,
+            **base,
             "agg_level_desc": "STATE",
             "domain_desc":    "TOTAL",
             "freq_desc":      "ANNUAL",
@@ -376,8 +382,20 @@ def load_state_snapshot(commodity: str, year: int) -> pd.DataFrame:
         df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
         df["metric"]     = label
         df = df.dropna(subset=["value", "state_abbr"])
-        df = df.drop_duplicates(subset=["state_abbr"])
-        frames.append(df[["state_name", "state_abbr", "value", "metric"]])
+        df = df[df["value"] > 0]  # drop suppressed zero rows
+
+        # For each state pick the best available period in priority order
+        best_rows = []
+        for abbr, grp in df.groupby("state_abbr"):
+            for period in PERIOD_PRIORITY:
+                row = grp[grp["reference_period_desc"] == period]
+                if not row.empty:
+                    best_rows.append(row.iloc[0])
+                    break
+        if not best_rows:
+            continue
+        result = pd.DataFrame(best_rows)
+        frames.append(result[["state_name", "state_abbr", "value", "metric"]])
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -431,7 +449,6 @@ with st.sidebar:
     commodity = st.selectbox(
         "Commodity",
         list(COMMODITIES.keys()),
-        format_func=lambda c: f"{COMMODITY_ICONS.get(c, '')}  {c}",
     )
     metric_list = list(COMMODITIES[commodity].keys())
 
@@ -444,14 +461,13 @@ with st.sidebar:
 
 
 # ── Header ───────────────────────────────────────────────────────────────────
-icon = COMMODITY_ICONS.get(commodity, "")
 st.markdown("<div class='jsa-topbar'></div>", unsafe_allow_html=True)
 st.markdown(f"""
 <div class='jsa-header'>
   <img src='{LOGO_WHITE}' alt='JSA'>
   <div class='jsa-header-divider'></div>
   <div>
-    <div class='jsa-header-title'>{icon} {commodity} Production Dashboard</div>
+    <div class='jsa-header-title'>{commodity} Production Dashboard</div>
     <div class='jsa-header-sub'>National &amp; State Level &nbsp;·&nbsp; USDA NASS Annual Data &nbsp;·&nbsp; John Stewart &amp; Associates</div>
   </div>
 </div>
