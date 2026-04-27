@@ -856,6 +856,9 @@ with tab_state:
                     sdf = tbl_shist[tbl_shist["state_abbr"] == abbr]
                     state_yr_vals[abbr] = {int(r["year"]): r["value"] for _, r in sdf.iterrows()}
 
+                cur_yr  = tbl_years_list[-1]   # most recent year in window
+                prev_yr = tbl_years_list[-2]   # prior year
+
                 def _build_row(label, yr_map, row_type="state"):
                     row = {"label": label, "row_type": row_type}
                     all_vals = []
@@ -866,10 +869,14 @@ with tab_state:
                             all_vals.append(v)
                     recent6  = [yr_map.get(yr) for yr in tbl_years_list[-6:]]
                     olym     = _olympic6(recent6)
-                    row["olym"]    = olym
-                    row["min_val"] = min(all_vals) if all_vals else None
-                    row["max_val"] = max(all_vals) if all_vals else None
-                    row["pct_us"]  = (olym / nat_olym_val * 100) if (olym and nat_olym_val) else None
+                    cur_v    = yr_map.get(cur_yr)
+                    prev_v   = yr_map.get(prev_yr)
+                    row["olym"]       = olym
+                    row["min_val"]    = min(all_vals) if all_vals else None
+                    row["max_val"]    = max(all_vals) if all_vals else None
+                    row["pct_us"]     = (olym / nat_olym_val * 100) if (olym and nat_olym_val) else None
+                    row["chg_vs_ly"]  = ((cur_v - prev_v) / prev_v * 100) if (cur_v and prev_v) else None
+                    row["pct_of_avg"] = (cur_v / olym * 100) if (cur_v and olym) else None
                     return row
 
                 # Build all rows
@@ -903,12 +910,19 @@ with tab_state:
                         f"font-weight:700;font-size:11px;white-space:nowrap;"
                         f"border-bottom:2px solid {TEAL};border-left:1px solid #4a5568;")
 
+                # Separate header style for % vs LY (green/red delta column)
+                _THD = (f"padding:7px 9px;text-align:right;background:{DARK_ALT};color:{WHITE};"
+                        f"font-weight:700;font-size:11px;white-space:nowrap;"
+                        f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
+
                 yr_hdrs    = "".join(f"<th style='{_TH}'>{yr}</th>" for yr in tbl_years_list)
                 thead_html = (
                     f"<thead><tr>"
                     f"<th style='{_TH0}'>State / Region</th>"
                     f"{yr_hdrs}"
+                    f"<th style='{_THD}'>% vs LY</th>"
                     f"<th style='{_THS}'>6-Yr Olympic Avg</th>"
+                    f"<th style='{_THP}'>% of Avg</th>"
                     f"<th style='{_THS}'>Min</th>"
                     f"<th style='{_THS}'>Max</th>"
                     f"<th style='{_THP}'>% of U.S.</th>"
@@ -920,7 +934,7 @@ with tab_state:
                 for row in tbl_rows:
                     rtype = row.get("row_type")
                     if rtype == "spacer":
-                        colspan = 1 + len(tbl_years_list) + 4
+                        colspan = 1 + len(tbl_years_list) + 6   # +2 for new columns
                         tbody_html += (
                             f"<tr><td colspan='{colspan}' "
                             f"style='height:9px;background:{DARK_BG};'></td></tr>"
@@ -979,13 +993,36 @@ with tab_state:
                             f"{_tbl_num(v, map_metric)}</td>"
                         )
 
-                    pct_val    = row.get("pct_us")
-                    pct_str    = "—" if pct_val is None else f"{pct_val:.1f}%"
+                    # % vs LY — green if up, red if down
+                    chg       = row.get("chg_vs_ly")
+                    if chg is None:
+                        chg_str  = "—"
+                        chg_clr  = GRAY
+                        chg_bg   = bg
+                    elif chg >= 0:
+                        chg_str  = f"▲ {chg:.1f}%"
+                        chg_clr  = "#4ade80"
+                        chg_bg   = "rgba(34,197,94,0.12)"
+                    else:
+                        chg_str  = f"▼ {abs(chg):.1f}%"
+                        chg_clr  = "#f87171"
+                        chg_bg   = "rgba(239,68,68,0.12)"
+                    td_chg = (f"padding:6px 9px;text-align:right;background:{chg_bg};"
+                              f"color:{chg_clr};font-weight:700;font-size:12px;"
+                              f"border-left:2px solid #4a5568;{border_top}")
+
+                    poa_val   = row.get("pct_of_avg")
+                    poa_str   = "—" if poa_val is None else f"{poa_val:.1f}%"
+                    pct_val   = row.get("pct_us")
+                    pct_str   = "—" if pct_val is None else f"{pct_val:.1f}%"
+
                     tbody_html += (
                         f"<tr>"
                         f"<td style='{td_lbl}'>{row['label']}</td>"
                         f"{yr_cells}"
+                        f"<td style='{td_chg}'>{chg_str}</td>"
                         f"<td style='{td_sp}'>{_tbl_num(row.get('olym'),    map_metric)}</td>"
+                        f"<td style='{td_pct}'>{poa_str}</td>"
                         f"<td style='{td_sp}'>{_tbl_num(row.get('min_val'), map_metric)}</td>"
                         f"<td style='{td_sp}'>{_tbl_num(row.get('max_val'), map_metric)}</td>"
                         f"<td style='{td_pct}'>{pct_str}</td>"
