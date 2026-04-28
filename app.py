@@ -142,6 +142,18 @@ STATE_TABLE_GROUPS = [
     {"states": ["WI", "MO", "TX"],              "subtotal": None},   # no subtotal; US Total follows
 ]
 
+# ── Quarterly Stocks config ───────────────────────────────────────────────────
+STOCKS_QUARTERS = ["DEC 1", "MAR 1", "JUN 1", "SEP 1"]
+
+# Commodities that have quarterly grain stocks in NASS; maps to API params
+STOCKS_META = {
+    "Corn":     {"commodity_desc": "CORN",     "unit_desc": "BU"},
+    "Soybeans": {"commodity_desc": "SOYBEANS", "unit_desc": "BU"},
+    "Wheat":    {"commodity_desc": "WHEAT",    "unit_desc": "BU"},
+    "Sorghum":  {"commodity_desc": "SORGHUM",  "unit_desc": "BU"},
+    "Barley":   {"commodity_desc": "BARLEY",   "unit_desc": "BU"},
+}
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Domestic Production | JSA",
@@ -334,7 +346,7 @@ def _bar_label(v: float, metric: str) -> str:
         return f"{v:.0f} {unit}"
     if "Acres" in metric:
         return f"{v/1_000_000:.1f}M Ac"
-    if "Production" in metric:
+    if "Production" in metric or "Stocks" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bu" in unit:
             return f"{v/1_000_000:.0f}M Bu"
@@ -348,14 +360,14 @@ def _bar_label(v: float, metric: str) -> str:
 
 def _tbl_num(v, metric) -> str:
     """Table cell: scaled number, no unit suffix.
-    Yield and Acres → 1 decimal; Production → whole number."""
+    Yield and Acres → 1 decimal; Production/Stocks → whole number."""
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return "—"
     if "Yield" in metric:
         return f"{v:.1f}"
     if "Acres" in metric:
         return f"{v / 1_000_000:.1f}"
-    if "Production" in metric:
+    if "Production" in metric or "Stocks" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         return f"{round(v / 1_000):,}" if "Bales" in unit else f"{round(v / 1_000_000):,}"
     return f"{round(v):,}"
@@ -385,7 +397,7 @@ def _tbl_unit(metric) -> str:
         return metric.split("(")[-1].replace(")", "").strip()
     if "Acres" in metric:
         return "Million Acres"
-    if "Production" in metric:
+    if "Production" in metric or "Stocks" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bales" in unit:   return "Thousand Bales"
         if "Bu"   in unit:   return "Million Bushels"
@@ -491,6 +503,58 @@ def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.Data
     df = df.drop_duplicates(subset=["year", "state_abbr"])
     return df[["year", "value", "state_abbr", "state_name"]].sort_values(["state_abbr", "year"])
 
+# ── Quarterly stocks loaders ─────────────────────────────────────────────────
+def _stocks_base(commodity: str, quarter: str) -> dict:
+    meta = STOCKS_META[commodity]
+    return {**meta, "statisticcat_desc": "STOCKS", "source_desc": "SURVEY",
+            "domain_desc": "TOTAL", "freq_desc": "QUARTERLY",
+            "reference_period_desc": quarter}
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_stocks_snapshot(commodity: str, quarter: str, year: int) -> pd.DataFrame:
+    if commodity not in STOCKS_META:
+        return pd.DataFrame()
+    df = _fetch({**_stocks_base(commodity, quarter),
+                 "agg_level_desc": "STATE", "year": str(year)})
+    if df.empty:
+        return pd.DataFrame()
+    df["value"]      = df["Value"].apply(_clean)
+    df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
+    df = df.dropna(subset=["value", "state_abbr"])
+    df = df[df["value"] > 0]
+    # Sum on-farm + off-farm rows if both returned
+    df = df.groupby(["state_name", "state_abbr"], as_index=False)["value"].sum()
+    return df[["state_name", "state_abbr", "value"]].copy()
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_stocks_history(commodity: str, quarter: str, y0: int, y1: int) -> pd.DataFrame:
+    if commodity not in STOCKS_META:
+        return pd.DataFrame()
+    df = _fetch({**_stocks_base(commodity, quarter),
+                 "agg_level_desc": "STATE", "year__GE": str(y0), "year__LE": str(y1)})
+    if df.empty:
+        return pd.DataFrame()
+    df["year"]       = df["year"].astype(int)
+    df["value"]      = df["Value"].apply(_clean)
+    df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
+    df = df.dropna(subset=["value", "state_abbr"])
+    df = df.groupby(["year", "state_abbr", "state_name"], as_index=False)["value"].sum()
+    return df[["year", "value", "state_abbr", "state_name"]].sort_values(["state_abbr", "year"])
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_stocks_national(commodity: str, quarter: str, y0: int, y1: int) -> pd.DataFrame:
+    if commodity not in STOCKS_META:
+        return pd.DataFrame()
+    df = _fetch({**_stocks_base(commodity, quarter),
+                 "agg_level_desc": "NATIONAL", "year__GE": str(y0), "year__LE": str(y1)})
+    if df.empty:
+        return pd.DataFrame()
+    df["year"]  = df["year"].astype(int)
+    df["value"] = df["Value"].apply(_clean)
+    df = df.dropna(subset=["value"])
+    df = df.groupby("year", as_index=False)["value"].sum()
+    return df[["year", "value"]].sort_values("year")
+
 # ── Chart base theme ─────────────────────────────────────────────────────────
 def _base_layout(fig, title="", height=390):
     fig.update_layout(
@@ -532,6 +596,10 @@ with st.sidebar:
     st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>State Level</p>", unsafe_allow_html=True)
     map_year = st.selectbox("Map Year", list(range(THIS_YEAR - 1, 1999, -1)))
 
+    st.markdown("---")
+    st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>Quarterly Stocks</p>", unsafe_allow_html=True)
+    stocks_year = st.selectbox("Stocks Year", list(range(THIS_YEAR - 1, 1999, -1)))
+
 
 # ── Header ───────────────────────────────────────────────────────────────────
 st.markdown("<div class='jsa-topbar'></div>", unsafe_allow_html=True)
@@ -552,7 +620,11 @@ with st.spinner("Fetching USDA NASS data..."):
     snap_df = load_state_snapshot(commodity, map_year)
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_nat, tab_state = st.tabs(["  📊  National Overview  ", "  🗺️  State Level  "])
+tab_nat, tab_state, tab_stocks = st.tabs([
+    "  📊  National Overview  ",
+    "  🗺️  State Level  ",
+    "  📦  Quarterly Stocks  ",
+])
 
 # ═════════════════════════════════════════════════════════════════════════════
 # TAB 1 — NATIONAL
@@ -1197,3 +1269,397 @@ with tab_state:
                     _base_layout(fig_vs, title=f"{selected_name} vs. U.S. — {map_metric}", height=380)
                     fig_vs.update_yaxes(tickformat=_ytick(map_metric))
                     col_r.plotly_chart(fig_vs, use_container_width=True)
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 3 — QUARTERLY STOCKS
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_stocks:
+    if commodity not in STOCKS_META:
+        st.info(
+            f"Quarterly grain stocks data is not available for **{commodity}** in USDA NASS. "
+            f"Available commodities: {', '.join(STOCKS_META.keys())}."
+        )
+    else:
+        unit_key  = STOCKS_META[commodity]["unit_desc"]          # e.g. "BU"
+        unit_disp = {"BU": "Bu", "TONS": "Tons"}.get(unit_key, unit_key)
+        sk_metric = f"Stocks ({unit_disp})"                      # e.g. "Stocks (Bu)"
+
+        # ── Quarter pill filter ───────────────────────────────────────────────
+        sk_quarter = st.radio(
+            "Quarter",
+            STOCKS_QUARTERS,
+            index=0,
+            horizontal=True,
+            label_visibility="collapsed",
+            key="sk_quarter",
+        )
+        st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+        # ── Load snapshot + prior year ────────────────────────────────────────
+        with st.spinner("Fetching USDA NASS stocks data..."):
+            sk_snap      = load_stocks_snapshot(commodity, sk_quarter, stocks_year)
+            sk_snap_prior = load_stocks_snapshot(commodity, sk_quarter, stocks_year - 1)
+
+        if sk_snap.empty:
+            c_msg, c_btn = st.columns([5, 1])
+            c_msg.warning(f"No stocks data for {commodity} {sk_quarter} {stocks_year}.")
+            if c_btn.button("🔄 Retry", key="retry_stocks"):
+                st.cache_data.clear(); st.rerun()
+        else:
+            # Merge prior year for hover change stats
+            if not sk_snap_prior.empty:
+                sk_snap = sk_snap.merge(
+                    sk_snap_prior[["state_abbr", "value"]].rename(columns={"value": "prior_value"}),
+                    on="state_abbr", how="left",
+                )
+            else:
+                sk_snap["prior_value"] = None
+
+            sk_snap["chg_nom"] = sk_snap["value"] - sk_snap["prior_value"]
+            sk_snap["chg_pct"] = sk_snap["chg_nom"] / sk_snap["prior_value"] * 100
+            sk_snap["chg_pct_str"] = sk_snap.apply(
+                lambda r: "N/A" if pd.isna(r["chg_pct"])
+                else f"+{r['chg_pct']:.1f}%" if r["chg_pct"] >= 0 else f"{r['chg_pct']:.1f}%", axis=1)
+            sk_snap["chg_nom_str"] = sk_snap["chg_nom"].apply(
+                lambda v: _nom_chg_str(v, sk_metric))
+
+            # ── Choropleth map ────────────────────────────────────────────────
+            fig_sk = px.choropleth(
+                sk_snap, locations="state_abbr", locationmode="USA-states",
+                color="value", scope="usa",
+                color_continuous_scale=[[0, "#1a2a2c"], [0.4, "#5ba5af"], [1, "#b8dde2"]],
+                hover_name="state_name",
+                hover_data={"value": ":,.0f", "state_abbr": False},
+                custom_data=["state_abbr", "state_name", "chg_pct_str", "chg_nom_str"],
+                labels={"value": sk_metric},
+                title=f"{commodity} Stocks — {sk_quarter} {stocks_year} (Million Bu)",
+            )
+            fig_sk.update_layout(
+                geo=dict(bgcolor=DARK_BG, lakecolor=DARK_BG, landcolor=DARK_CARD,
+                         showlakes=True, showcoastlines=False),
+                plot_bgcolor=DARK_BG, paper_bgcolor=DARK_BG,
+                font=dict(color=WHITE), title_font=dict(size=15, color=WHITE),
+                coloraxis_colorbar=dict(
+                    title=dict(text=sk_metric, font=dict(color=GRAY, size=11)),
+                    tickfont=dict(color=WHITE), bgcolor=DARK_CARD, bordercolor=DARK_ALT,
+                ),
+                height=480, margin=dict(l=0, r=0, t=50, b=0), dragmode=False,
+            )
+            fig_sk.update_traces(
+                selector=dict(type="choropleth"),
+                marker_line_color="white", marker_line_width=0.6,
+                hovertemplate=(
+                    "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
+                    + sk_metric + ": %{z:,.1f}<br>"
+                    "vs LY: %{customdata[2]}  (%{customdata[3]})<extra></extra>"
+                ),
+            )
+            # All-states outline
+            all_abbrs_list = list(STATE_ABBREV.values())
+            fig_sk.add_trace(go.Choropleth(
+                locations=all_abbrs_list, locationmode="USA-states",
+                z=[0] * len(all_abbrs_list),
+                colorscale=[[0,"rgba(0,0,0,0)"],[1,"rgba(0,0,0,0)"]],
+                showscale=False, marker_line_color="white",
+                marker_line_width=0.6, hoverinfo="skip",
+            ))
+            # Value labels on map
+            lbl_lats, lbl_lons, lbl_texts = [], [], []
+            for _, row in sk_snap.iterrows():
+                ab = row["state_abbr"]
+                if ab in STATE_CENTERS:
+                    lbl_lats.append(STATE_CENTERS[ab][0])
+                    lbl_lons.append(STATE_CENTERS[ab][1])
+                    lbl_texts.append(_bar_label(row["value"], sk_metric))
+            fig_sk.add_trace(go.Scattergeo(
+                lat=lbl_lats, lon=lbl_lons, text=lbl_texts, mode="text",
+                textfont=dict(color=WHITE, size=8, family="Open Sans"),
+                showlegend=False, hoverinfo="skip",
+            ))
+
+            # Click-to-select state
+            sk_event = st.plotly_chart(
+                fig_sk, use_container_width=True, on_select="rerun",
+                key=f"sk_map_{commodity}_{sk_quarter}_{stocks_year}",
+                config={"scrollZoom": False, "displayModeBar": False},
+            )
+            valid_sk_abbrs = set(sk_snap["state_abbr"].tolist())
+            if sk_event and sk_event.selection and sk_event.selection.points:
+                pt  = sk_event.selection.points[0]
+                cd  = pt.get("customdata") or []
+                ab  = cd[0] if len(cd) >= 1 else pt.get("location")
+                if ab in valid_sk_abbrs:
+                    st.session_state["sel_state_stocks"] = ab
+            sk_persisted = st.session_state.get("sel_state_stocks")
+            if sk_persisted not in valid_sk_abbrs:
+                sk_persisted = None
+                st.session_state["sel_state_stocks"] = None
+            sk_selected_abbr = sk_persisted
+            sk_selected_name = ABBREV_STATE.get(sk_selected_abbr, "").title() if sk_selected_abbr else None
+
+            # Clear button
+            c1, c2 = st.columns([1, 5])
+            if sk_selected_abbr:
+                c1.caption(f"Selected: **{sk_selected_abbr}**")
+                if c2.button("✕ Clear", key="clear_state_stocks"):
+                    st.session_state["sel_state_stocks"] = None; st.rerun()
+            else:
+                c1.caption("Click a state on the map")
+
+            # ── Top-15 bar ────────────────────────────────────────────────────
+            top15_sk = sk_snap.sort_values("value", ascending=False).head(15)
+            bar_clrs = [TEAL if r["state_abbr"] == sk_selected_abbr else TEAL_DIM
+                        for _, r in top15_sk.iterrows()]
+            fig_skbar = go.Figure(go.Bar(
+                x=top15_sk["state_abbr"], y=top15_sk["value"],
+                marker_color=bar_clrs,
+                text=top15_sk["value"].apply(lambda v: _bar_label(v, sk_metric)),
+                textposition="outside", textfont=dict(color=WHITE, size=11),
+                hovertemplate="<b>%{x}</b><br>" + sk_metric + ": %{y:,.0f}<extra></extra>",
+            ))
+            _base_layout(fig_skbar, title=f"Top 15 States — {sk_metric} ({sk_quarter} {stocks_year})", height=400)
+            fig_skbar.update_yaxes(tickformat=",.0f")
+            fig_skbar.update_layout(showlegend=False)
+            st.plotly_chart(fig_skbar, use_container_width=True)
+
+            # ── State comparison table ────────────────────────────────────────
+            tbl_unit_lbl = _tbl_unit(sk_metric)
+            tbl_unit_sfx = (f" <span style='color:{TEAL};font-weight:400;text-transform:none;"
+                            f"letter-spacing:0'>({tbl_unit_lbl})</span>" if tbl_unit_lbl else "")
+            st.markdown(
+                f"<p style='color:{GRAY};font-size:12px;font-weight:700;"
+                f"text-transform:uppercase;letter-spacing:.06em;margin:20px 0 6px'>"
+                f"10-Year State Comparison — {sk_quarter} Stocks{tbl_unit_sfx}</p>",
+                unsafe_allow_html=True,
+            )
+
+            sk_y0 = stocks_year - 9
+            sk_years = list(range(sk_y0, stocks_year + 1))
+
+            with st.spinner("Loading stocks comparison table..."):
+                sk_hist = load_stocks_history(commodity, sk_quarter, sk_y0, stocks_year)
+                sk_nat  = load_stocks_national(commodity, sk_quarter, sk_y0, stocks_year)
+
+            if sk_hist.empty or "state_abbr" not in sk_hist.columns:
+                c_msg2, c_btn2 = st.columns([5, 1])
+                c_msg2.warning("⏱ Stocks comparison data unavailable — NASS API timed out.")
+                if c_btn2.button("🔄 Retry", key="retry_stocks_tbl"):
+                    st.cache_data.clear(); st.rerun()
+            else:
+                sk_nat_yr = dict(zip(sk_nat["year"], sk_nat["value"])) if not sk_nat.empty else {}
+                sk_nat6   = [sk_nat_yr.get(yr) for yr in sk_years[-6:]]
+                sk_nat_olym = _olympic6(sk_nat6)
+
+                sk_state_yr: dict = {}
+                for abbr in [a for grp in STATE_TABLE_GROUPS for a in grp["states"]]:
+                    sdf = sk_hist[sk_hist["state_abbr"] == abbr]
+                    sk_state_yr[abbr] = {int(r["year"]): r["value"] for _, r in sdf.iterrows()}
+
+                sk_cur_yr, sk_prev_yr = sk_years[-1], sk_years[-2]
+
+                def _sk_row(label, yr_map, row_type="state"):
+                    row = {"label": label, "row_type": row_type}
+                    all_vals = []
+                    for yr in sk_years:
+                        v = yr_map.get(yr); row[yr] = v
+                        if v is not None: all_vals.append(v)
+                    recent6 = [yr_map.get(yr) for yr in sk_years[-6:]]
+                    olym    = _olympic6(recent6)
+                    cur_v   = yr_map.get(sk_cur_yr)
+                    prev_v  = yr_map.get(sk_prev_yr)
+                    row["olym"]       = olym
+                    row["min_val"]    = min(all_vals) if all_vals else None
+                    row["max_val"]    = max(all_vals) if all_vals else None
+                    row["pct_us"]     = (olym / sk_nat_olym * 100) if (olym and sk_nat_olym) else None
+                    row["chg_vs_ly"]  = ((cur_v - prev_v) / prev_v * 100) if (cur_v and prev_v) else None
+                    row["pct_of_avg"] = (cur_v / olym * 100) if (cur_v and olym) else None
+                    return row
+
+                sk_rows = []
+                for g_idx, grp in enumerate(STATE_TABLE_GROUPS):
+                    for abbr in grp["states"]:
+                        sk_rows.append(_sk_row(abbr, sk_state_yr.get(abbr, {}), "state"))
+                    if grp["subtotal"]:
+                        sub_yr = {}
+                        for yr in sk_years:
+                            vals  = [sk_state_yr.get(a, {}).get(yr) for a in grp["states"]]
+                            valid = [v for v in vals if v is not None]
+                            sub_yr[yr] = sum(valid) if valid else None
+                        sk_rows.append(_sk_row(grp["subtotal"], sub_yr, "subtotal"))
+                    if g_idx < len(STATE_TABLE_GROUPS) - 1:
+                        sk_rows.append({"row_type": "spacer"})
+                sk_rows.append(_sk_row("US Total", {yr: sk_nat_yr.get(yr) for yr in sk_years}, "us"))
+
+                # ── Render table (same style as production table) ─────────────
+                _TH  = (f"padding:7px 9px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
+                        f"font-weight:700;font-size:11px;white-space:nowrap;border-bottom:2px solid {TEAL};")
+                _TH0 = (f"padding:7px 10px;text-align:left;background:{TEAL_DIM};color:{WHITE};"
+                        f"font-weight:700;font-size:11px;border-bottom:2px solid {TEAL};")
+                _THS = (f"padding:7px 10px;text-align:right;background:{DARK_ALT};color:{TEAL};"
+                        f"font-weight:700;font-size:11px;white-space:nowrap;"
+                        f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
+                _THP = (f"padding:7px 10px;text-align:right;background:{DARK_ALT};color:{AMBER};"
+                        f"font-weight:700;font-size:11px;white-space:nowrap;"
+                        f"border-bottom:2px solid {TEAL};border-left:1px solid #4a5568;")
+                _THD = (f"padding:7px 9px;text-align:right;background:{DARK_ALT};color:{WHITE};"
+                        f"font-weight:700;font-size:11px;white-space:nowrap;"
+                        f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
+
+                yr_hdrs    = "".join(f"<th style='{_TH}'>{yr}</th>" for yr in sk_years)
+                sk_thead   = (f"<thead><tr><th style='{_TH0}'>State / Region</th>{yr_hdrs}"
+                              f"<th style='{_THD}'>% vs LY</th>"
+                              f"<th style='{_THS}'>6-Yr Olympic Avg</th>"
+                              f"<th style='{_THP}'>% of Avg</th>"
+                              f"<th style='{_THS}'>Min</th><th style='{_THS}'>Max</th>"
+                              f"<th style='{_THP}'>% of U.S.</th></tr></thead>")
+
+                sk_tbody = ""
+                row_idx  = 0
+                for row in sk_rows:
+                    rtype = row.get("row_type")
+                    if rtype == "spacer":
+                        colspan = 1 + len(sk_years) + 6
+                        sk_tbody += (f"<tr><td colspan='{colspan}' "
+                                     f"style='height:9px;background:{DARK_BG};'></td></tr>")
+                        continue
+                    if rtype == "us":
+                        bg = "#1b2e30"; c_lbl = TEAL; c_num = WHITE; c_sp = TEAL
+                        c_pct = AMBER; fw_lbl = "700"; fs_lbl = "13px"
+                        border_top = f"border-top:2px solid {TEAL};"
+                    elif rtype == "subtotal":
+                        bg = DARK_ALT; c_lbl = TEAL; c_num = TEAL; c_sp = TEAL
+                        c_pct = AMBER; fw_lbl = "700"; fs_lbl = "12px"
+                        border_top = f"border-top:1px solid {TEAL_DIM};"
+                    else:
+                        bg = DARK_CARD if row_idx % 2 == 0 else "#302e2e"
+                        c_lbl = WHITE; c_num = GRAY; c_sp = WHITE; c_pct = AMBER
+                        fw_lbl = "400"; fs_lbl = "12px"; border_top = ""
+                        row_idx += 1
+
+                    yr_pairs    = [(yr, row[yr]) for yr in sk_years if row.get(yr) is not None]
+                    sorted_vals = sorted(yr_pairs, key=lambda x: x[1])
+                    bottom2 = {yr for yr, _ in sorted_vals[:2]}  if len(sorted_vals) >= 2 else set()
+                    top2    = {yr for yr, _ in sorted_vals[-2:]} if len(sorted_vals) >= 2 else set()
+
+                    td_lbl = (f"padding:7px 10px;text-align:left;background:{bg};color:{c_lbl};"
+                              f"font-weight:{fw_lbl};font-size:{fs_lbl};{border_top}")
+                    td_sp  = (f"padding:6px 10px;text-align:right;background:{bg};color:{c_sp};"
+                              f"font-weight:600;font-size:12px;border-left:2px solid #4a5568;{border_top}")
+                    td_pct = (f"padding:6px 10px;text-align:right;background:{bg};color:{c_pct};"
+                              f"font-weight:700;font-size:12px;border-left:1px solid #4a5568;{border_top}")
+
+                    yr_cells = ""
+                    for yr in sk_years:
+                        v = row.get(yr)
+                        if yr in top2 and v is not None:
+                            cb = "rgba(34,197,94,0.18)"; cc = "#4ade80"; cf = "700"
+                        elif yr in bottom2 and v is not None:
+                            cb = "rgba(239,68,68,0.18)"; cc = "#f87171"; cf = "700"
+                        else:
+                            cb = bg; cc = c_num; cf = "400"
+                        yr_cells += (f"<td style='padding:6px 9px;text-align:right;"
+                                     f"background:{cb};color:{cc};font-weight:{cf};"
+                                     f"font-size:12px;{border_top}'>"
+                                     f"{_tbl_num(v, sk_metric)}</td>")
+
+                    chg = row.get("chg_vs_ly")
+                    if chg is None:
+                        chg_str = "—"; chg_clr = GRAY; chg_bg = bg
+                    elif chg >= 0:
+                        chg_str = f"▲ {chg:.1f}%"; chg_clr = "#4ade80"; chg_bg = "rgba(34,197,94,0.12)"
+                    else:
+                        chg_str = f"▼ {abs(chg):.1f}%"; chg_clr = "#f87171"; chg_bg = "rgba(239,68,68,0.12)"
+                    td_chg = (f"padding:6px 9px;text-align:right;background:{chg_bg};"
+                              f"color:{chg_clr};font-weight:700;font-size:12px;"
+                              f"border-left:2px solid #4a5568;{border_top}")
+
+                    poa_val = row.get("pct_of_avg")
+                    if poa_val is None:
+                        poa_str = "—"; poa_clr = GRAY; poa_bg = bg
+                    elif poa_val >= 100:
+                        poa_str = f"▲ {poa_val - 100:.1f}%"; poa_clr = "#4ade80"; poa_bg = "rgba(34,197,94,0.12)"
+                    else:
+                        poa_str = f"▼ {100 - poa_val:.1f}%"; poa_clr = "#f87171"; poa_bg = "rgba(239,68,68,0.12)"
+                    td_poa = (f"padding:6px 9px;text-align:right;background:{poa_bg};"
+                              f"color:{poa_clr};font-weight:700;font-size:12px;"
+                              f"border-left:1px solid #4a5568;{border_top}")
+
+                    pct_val = row.get("pct_us")
+                    pct_str = "—" if pct_val is None else f"{pct_val:.1f}%"
+
+                    sk_tbody += (
+                        f"<tr><td style='{td_lbl}'>{row['label']}</td>{yr_cells}"
+                        f"<td style='{td_chg}'>{chg_str}</td>"
+                        f"<td style='{td_sp}'>{_tbl_num(row.get('olym'),    sk_metric)}</td>"
+                        f"<td style='{td_poa}'>{poa_str}</td>"
+                        f"<td style='{td_sp}'>{_tbl_num(row.get('min_val'), sk_metric)}</td>"
+                        f"<td style='{td_sp}'>{_tbl_num(row.get('max_val'), sk_metric)}</td>"
+                        f"<td style='{td_pct}'>{pct_str}</td></tr>"
+                    )
+
+                st.markdown(
+                    f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;"
+                    f"margin-bottom:20px;'>"
+                    f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif;'>"
+                    f"{sk_thead}<tbody>{sk_tbody}</tbody></table></div>",
+                    unsafe_allow_html=True,
+                )
+
+            # ── State historical stocks ───────────────────────────────────────
+            st.markdown("---")
+            if sk_selected_abbr is None:
+                st.markdown(
+                    f"<div style='background:{DARK_CARD};border-radius:8px;padding:28px;"
+                    f"text-align:center;color:{GRAY};font-size:15px;border:1px dashed #4a5568;'>"
+                    f"🗺️ &nbsp; Click a state on the map to view its historical trend"
+                    f"</div>", unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    f"<h3 style='color:{WHITE};margin-bottom:4px'>"
+                    f"{sk_selected_name} — Historical {sk_quarter} Stocks</h3>",
+                    unsafe_allow_html=True,
+                )
+                with st.spinner(f"Loading {sk_selected_name} stocks history..."):
+                    sk_full_hist = load_stocks_history(
+                        commodity, sk_quarter, year_range[0], year_range[1]
+                    )
+                    sk_nat_full  = load_stocks_national(
+                        commodity, sk_quarter, year_range[0], year_range[1]
+                    )
+
+                s_sk = sk_full_hist[sk_full_hist["state_abbr"] == sk_selected_abbr].sort_values("year")
+                n_sk = sk_nat_full.sort_values("year")
+
+                if s_sk.empty:
+                    st.warning(f"No historical stocks data found for {sk_selected_name}.")
+                else:
+                    col_l, col_r = st.columns(2, gap="medium")
+
+                    fig_skt = go.Figure()
+                    fig_skt.add_trace(go.Scatter(
+                        x=s_sk["year"], y=s_sk["value"],
+                        mode="lines+markers",
+                        line=dict(color=TEAL, width=2.5), marker=dict(size=5),
+                        fill="tozeroy", fillcolor="rgba(91,165,175,0.12)",
+                        name=sk_selected_name,
+                        hovertemplate=f"<b>%{{x}}</b><br>Stocks: %{{y:,.0f}}<extra></extra>",
+                    ))
+                    _base_layout(fig_skt, title=f"{sk_selected_name} — {sk_quarter} Stocks", height=380)
+                    col_l.plotly_chart(fig_skt, use_container_width=True)
+
+                    fig_skv = go.Figure()
+                    fig_skv.add_trace(go.Scatter(
+                        x=n_sk["year"], y=n_sk["value"],
+                        mode="lines", name="U.S. Total",
+                        line=dict(color=WHITE, width=2, dash="dot"),
+                        hovertemplate="<b>U.S.</b><br>%{x}: %{y:,.0f}<extra></extra>",
+                    ))
+                    fig_skv.add_trace(go.Scatter(
+                        x=s_sk["year"], y=s_sk["value"],
+                        mode="lines+markers", name=sk_selected_name,
+                        line=dict(color=TEAL, width=2.5), marker=dict(size=5),
+                        hovertemplate=f"<b>{sk_selected_name}</b><br>%{{x}}: %{{y:,.0f}}<extra></extra>",
+                    ))
+                    _base_layout(fig_skv, title=f"{sk_selected_name} vs. U.S. — {sk_quarter} Stocks", height=380)
+                    col_r.plotly_chart(fig_skv, use_container_width=True)
