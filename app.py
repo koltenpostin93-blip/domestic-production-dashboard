@@ -785,6 +785,20 @@ with tab_state:
                 ),
             )
 
+            # Transparent overlay covering ALL 50 states so every border
+            # is drawn in white, including states with no data
+            all_state_abbrs = list(STATE_ABBREV.values())
+            fig_map.add_trace(go.Choropleth(
+                locations=all_state_abbrs,
+                locationmode="USA-states",
+                z=[0] * len(all_state_abbrs),
+                colorscale=[[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]],
+                showscale=False,
+                marker_line_color="white",
+                marker_line_width=0.6,
+                hoverinfo="skip",
+            ))
+
             # State value labels via scattergeo
             lbl_lats, lbl_lons, lbl_texts = [], [], []
             for _, row in metric_snap.iterrows():
