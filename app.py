@@ -360,6 +360,25 @@ def _tbl_num(v, metric) -> str:
         return f"{round(v / 1_000):,}" if "Bales" in unit else f"{round(v / 1_000_000):,}"
     return f"{round(v):,}"
 
+def _nom_chg_str(chg, metric) -> str:
+    """Signed nominal change in display units, 1 decimal. e.g. '+50.3M Bu'"""
+    if chg is None or (isinstance(chg, float) and pd.isna(chg)):
+        return "N/A"
+    sign = "+" if chg >= 0 else ""
+    if "Yield" in metric:
+        unit = metric.split("(")[-1].replace(")", "").strip()
+        return f"{sign}{chg:.1f} {unit}"
+    if "Acres" in metric:
+        return f"{sign}{chg / 1_000_000:.1f}M Ac"
+    if "Production" in metric:
+        unit = metric.split("(")[-1].replace(")", "").strip()
+        if "Bales" in unit:
+            return f"{sign}{chg / 1_000:.1f}K Bales"
+        if "Bu"  in unit: return f"{sign}{chg / 1_000_000:.1f}M Bu"
+        if "Ton" in unit: return f"{sign}{chg / 1_000_000:.1f}M Tons"
+        if "Lb"  in unit: return f"{sign}{chg / 1_000_000:.1f}M Lbs"
+    return f"{sign}{chg:.1f}"
+
 def _tbl_unit(metric) -> str:
     """Human-readable unit label for table title parenthetical."""
     if "Yield" in metric:
@@ -703,6 +722,28 @@ with tab_state:
         if metric_snap.empty:
             st.warning(f"No state data for {map_metric} in {map_year}.")
         else:
+            # ── Prior-year data for hover change stats ────────────────────────
+            prior_snap = load_state_snapshot(commodity, map_year - 1)
+            prior_metric = (
+                prior_snap[prior_snap["metric"] == map_metric][["state_abbr", "value"]]
+                .rename(columns={"value": "prior_value"})
+                if not prior_snap.empty else pd.DataFrame(columns=["state_abbr", "prior_value"])
+            )
+            metric_snap = metric_snap.merge(prior_metric, on="state_abbr", how="left")
+            metric_snap["chg_nom"] = metric_snap["value"] - metric_snap["prior_value"]
+            metric_snap["chg_pct"] = (
+                metric_snap["chg_nom"] / metric_snap["prior_value"] * 100
+            )
+            metric_snap["chg_pct_str"] = metric_snap.apply(
+                lambda r: "N/A" if pd.isna(r["chg_pct"])
+                else f"+{r['chg_pct']:.1f}%" if r["chg_pct"] >= 0
+                else f"{r['chg_pct']:.1f}%",
+                axis=1,
+            )
+            metric_snap["chg_nom_str"] = metric_snap["chg_nom"].apply(
+                lambda v: _nom_chg_str(v, map_metric)
+            )
+
             # ── Choropleth ───────────────────────────────────────────────────
             fig_map = px.choropleth(
                 metric_snap,
@@ -713,7 +754,7 @@ with tab_state:
                 color_continuous_scale=[[0, "#1a2a2c"], [0.4, "#5ba5af"], [1, "#b8dde2"]],
                 hover_name="state_name",
                 hover_data={"value": ":,.0f", "state_abbr": False},
-                custom_data=["state_abbr", "state_name"],
+                custom_data=["state_abbr", "state_name", "chg_pct_str", "chg_nom_str"],
                 labels={"value": map_metric},
                 title=f"{commodity} — {map_metric} by State ({map_year})",
             )
@@ -731,13 +772,17 @@ with tab_state:
                 margin=dict(l=0, r=0, t=50, b=0),
                 dragmode=False,
             )
-            # White state borders
+            # White state borders + enriched hover
             fig_map.update_traces(
                 selector=dict(type="choropleth"),
                 marker_line_color="white",
                 marker_line_width=0.6,
-                hovertemplate="<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
-                              + map_metric + ": %{z:,.0f}<extra></extra>",
+                hovertemplate=(
+                    "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
+                    + map_metric + ": %{z:,.1f}<br>"
+                    "vs LY: %{customdata[2]}  (%{customdata[3]})"
+                    "<extra></extra>"
+                ),
             )
 
             # State value labels via scattergeo
