@@ -471,6 +471,15 @@ def _olympic6(vals):
     return sum(clean[1:-1]) / len(clean[1:-1])
 
 # ── Data loaders ─────────────────────────────────────────────────────────────
+def _prefer_all_classes(df: pd.DataFrame) -> pd.DataFrame:
+    """When NASS returns multiple class rows per year/state (e.g. Wheat has
+    ALL CLASSES / WINTER / SPRING / DURUM), keep only 'ALL CLASSES' rows.
+    If the column is absent or no 'ALL CLASSES' row exists, return df unchanged."""
+    if "class_desc" not in df.columns:
+        return df
+    all_cls = df[df["class_desc"].str.upper().str.strip() == "ALL CLASSES"]
+    return all_cls if not all_cls.empty else df
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def load_national(commodity: str, y0: int, y1: int) -> pd.DataFrame:
     params_map = COMMODITIES[commodity]
@@ -486,6 +495,8 @@ def load_national(commodity: str, y0: int, y1: int) -> pd.DataFrame:
         })
         if df.empty:
             continue
+        # Prefer "ALL CLASSES" rows when commodity reports multiple classes
+        df = _prefer_all_classes(df)
         df = df[["year", "Value"]].copy()
         df["year"]   = df["year"].astype(int)
         df["value"]  = df["Value"].apply(_clean)
@@ -520,6 +531,8 @@ def load_state_snapshot(commodity: str, year: int) -> pd.DataFrame:
         })
         if df.empty:
             continue
+        # Prefer "ALL CLASSES" rows when commodity reports multiple classes
+        df = _prefer_all_classes(df)
         df["value"]      = df["Value"].apply(_clean)
         df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
         df["metric"]     = label
@@ -553,6 +566,8 @@ def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.Data
     })
     if df.empty:
         return pd.DataFrame()
+    # Prefer "ALL CLASSES" rows when commodity reports multiple classes
+    df = _prefer_all_classes(df)
     df["year"]       = df["year"].astype(int)
     df["value"]      = df["Value"].apply(_clean)
     df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
