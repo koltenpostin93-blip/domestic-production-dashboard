@@ -423,7 +423,7 @@ def _tbl_num(v, metric) -> str:
     if "Yield" in metric:
         return f"{v:.1f}"
     if "Acres" in metric:
-        return f"{v / 1_000_000:.1f}"
+        return f"{v / 1_000_000:.2f}"
     if "Production" in metric or "Stocks" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         return f"{round(v / 1_000):,}" if "Bales" in unit else f"{round(v / 1_000_000):,}"
@@ -678,7 +678,7 @@ with st.sidebar:
 
     st.markdown("---")
     st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>State Level</p>", unsafe_allow_html=True)
-    map_year = st.selectbox("Map Year", list(range(THIS_YEAR - 1, 1999, -1)))
+    map_year = st.selectbox("Map Year", list(range(THIS_YEAR, 1999, -1)))
 
     st.markdown("---")
     st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>Quarterly Stocks</p>", unsafe_allow_html=True)
@@ -878,7 +878,25 @@ with tab_state:
         if metric_snap.empty:
             st.warning(f"No state data for {map_metric} in {map_year}.")
         else:
-            # ── Prior-year data for hover change stats ────────────────────────
+            # ── Map view toggle ───────────────────────────────────────────────
+            map_view = st.radio(
+                "Map view",
+                ["Value", "vs Last Year", "vs Olympic Avg", "vs Year"],
+                horizontal=True,
+                label_visibility="collapsed",
+                key="map_view",
+            )
+            comp_year = None
+            if map_view == "vs Year":
+                cv_col, _ = st.columns([2, 8])
+                comp_year = cv_col.selectbox(
+                    "Compare to",
+                    [y for y in range(map_year - 1, 1989, -1)],
+                    key="map_comp_year",
+                )
+            st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+
+            # ── Always load LY for hover ──────────────────────────────────────
             prior_snap = load_state_snapshot(commodity, map_year - 1)
             prior_metric = (
                 prior_snap[prior_snap["metric"] == map_metric][["state_abbr", "value"]]
@@ -887,88 +905,191 @@ with tab_state:
             )
             metric_snap = metric_snap.merge(prior_metric, on="state_abbr", how="left")
             metric_snap["chg_nom"] = metric_snap["value"] - metric_snap["prior_value"]
-            metric_snap["chg_pct"] = (
-                metric_snap["chg_nom"] / metric_snap["prior_value"] * 100
-            )
+            metric_snap["chg_pct"] = metric_snap["chg_nom"] / metric_snap["prior_value"] * 100
             metric_snap["chg_pct_str"] = metric_snap.apply(
                 lambda r: "N/A" if pd.isna(r["chg_pct"])
                 else f"+{r['chg_pct']:.1f}%" if r["chg_pct"] >= 0
-                else f"{r['chg_pct']:.1f}%",
-                axis=1,
+                else f"{r['chg_pct']:.1f}%", axis=1,
             )
             metric_snap["chg_nom_str"] = metric_snap["chg_nom"].apply(
                 lambda v: _nom_chg_str(v, map_metric)
             )
 
+            # ── Build color column per view mode ──────────────────────────────
+            diverging   = False
+            map_cscale  = [[0, "#1a2a2c"], [0.4, "#5ba5af"], [1, "#b8dde2"]]
+            color_range = None
+            cbar_title  = map_metric
+
+            def _pct_str(v):
+                if v is None or (isinstance(v, float) and pd.isna(v)): return "N/A"
+                return f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%"
+
+            if map_view == "Value":
+                metric_snap["color_val"] = metric_snap["value"]
+                metric_snap["lbl_str"]   = metric_snap["value"].apply(
+                    lambda v: _bar_label(v, map_metric))
+                # hover: value + vs-LY context
+                metric_snap["hover_a"] = metric_snap["chg_pct_str"]
+                metric_snap["hover_b"] = metric_snap["chg_nom_str"]
+                hover_tmpl = (
+                    "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
+                    + map_metric + ": %{z:,.1f}<br>"
+                    "vs LY: %{customdata[2]}  (%{customdata[3]})"
+                    "<extra></extra>"
+                )
+
+            elif map_view == "vs Last Year":
+                metric_snap["color_val"] = metric_snap["chg_pct"]
+                metric_snap["lbl_str"]   = metric_snap["chg_pct"].apply(_pct_str)
+                metric_snap["hover_a"]   = metric_snap["value"].apply(
+                    lambda v: _bar_label(v, map_metric))
+                metric_snap["hover_b"]   = metric_snap["prior_value"].apply(
+                    lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
+                hover_tmpl = (
+                    "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
+                    "vs LY: <b>%{z:+.1f}%</b><br>"
+                    f"{map_year}: %{{customdata[2]}}<br>"
+                    f"{map_year - 1}: %{{customdata[3]}}"
+                    "<extra></extra>"
+                )
+                diverging  = True
+                cbar_title = "% vs Last Year"
+
+            elif map_view == "vs Olympic Avg":
+                hist_y0 = map_year - 5   # 6 years: map_year-5 … map_year
+                with st.spinner("Loading history for olympic average..."):
+                    avg_hist = load_state_history(commodity, map_metric, hist_y0, map_year)
+                avg_by_state = {}
+                if not avg_hist.empty:
+                    for abbr, grp in avg_hist.groupby("state_abbr"):
+                        vals = [
+                            float(grp.loc[grp["year"] == yr, "value"].iloc[0])
+                            if yr in grp["year"].values else None
+                            for yr in range(hist_y0, map_year + 1)
+                        ]
+                        avg_by_state[abbr] = _olympic6(vals)
+                metric_snap["state_avg"]  = metric_snap["state_abbr"].map(avg_by_state)
+                metric_snap["color_val"]  = (
+                    (metric_snap["value"] - metric_snap["state_avg"])
+                    / metric_snap["state_avg"] * 100
+                )
+                metric_snap["lbl_str"]    = metric_snap["color_val"].apply(_pct_str)
+                metric_snap["hover_a"]    = metric_snap["value"].apply(
+                    lambda v: _bar_label(v, map_metric))
+                metric_snap["hover_b"]    = metric_snap["state_avg"].apply(
+                    lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
+                hover_tmpl = (
+                    "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
+                    "vs Olympic Avg: <b>%{z:+.1f}%</b><br>"
+                    f"{map_year}: %{{customdata[2]}}<br>"
+                    "Olympic Avg: %{customdata[3]}"
+                    "<extra></extra>"
+                )
+                diverging  = True
+                cbar_title = "% vs Olympic Avg"
+
+            else:   # vs Year
+                with st.spinner(f"Loading {comp_year} data..."):
+                    comp_snap_raw = load_state_snapshot(commodity, comp_year)
+                comp_metric = (
+                    comp_snap_raw[comp_snap_raw["metric"] == map_metric][["state_abbr", "value"]]
+                    .rename(columns={"value": "comp_value"})
+                    if not comp_snap_raw.empty
+                    else pd.DataFrame(columns=["state_abbr", "comp_value"])
+                )
+                metric_snap = metric_snap.merge(comp_metric, on="state_abbr", how="left")
+                metric_snap["color_val"] = (
+                    (metric_snap["value"] - metric_snap["comp_value"])
+                    / metric_snap["comp_value"] * 100
+                )
+                metric_snap["lbl_str"]   = metric_snap["color_val"].apply(_pct_str)
+                metric_snap["hover_a"]   = metric_snap["value"].apply(
+                    lambda v: _bar_label(v, map_metric))
+                metric_snap["hover_b"]   = metric_snap["comp_value"].apply(
+                    lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
+                hover_tmpl = (
+                    "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
+                    f"vs {comp_year}: <b>%{{z:+.1f}}%</b><br>"
+                    f"{map_year}: %{{customdata[2]}}<br>"
+                    f"{comp_year}: %{{customdata[3]}}"
+                    "<extra></extra>"
+                )
+                diverging  = True
+                cbar_title = f"% vs {comp_year}"
+
+            # Diverging scale: red ← 0 → green, symmetric range
+            if diverging:
+                map_cscale = [[0, "#ef4444"], [0.5, "#e8e8e8"], [1, "#22c55e"]]
+                valid_cv   = metric_snap["color_val"].dropna()
+                if not valid_cv.empty:
+                    max_abs    = max(abs(valid_cv.min()), abs(valid_cv.max())) or 1
+                    color_range = [-max_abs, max_abs]
+
             # ── Choropleth ───────────────────────────────────────────────────
-            fig_map = px.choropleth(
-                metric_snap,
-                locations="state_abbr",
-                locationmode="USA-states",
-                color="value",
-                scope="usa",
-                color_continuous_scale=[[0, "#1a2a2c"], [0.4, "#5ba5af"], [1, "#b8dde2"]],
+            px_kwargs = dict(
+                locations="state_abbr", locationmode="USA-states",
+                color="color_val", scope="usa",
+                color_continuous_scale=map_cscale,
                 hover_name="state_name",
-                hover_data={"value": ":,.0f", "state_abbr": False},
-                custom_data=["state_abbr", "state_name", "chg_pct_str", "chg_nom_str"],
-                labels={"value": map_metric},
-                title=f"{commodity} — {map_metric} by State ({map_year})",
+                hover_data={"color_val": False, "state_abbr": False},
+                custom_data=["state_abbr", "state_name", "hover_a", "hover_b"],
+                labels={"color_val": cbar_title},
+                title=f"{commodity} — {map_metric} by State ({map_year})  [{cbar_title}]",
             )
+            if color_range:
+                px_kwargs["range_color"] = color_range
+
+            fig_map = px.choropleth(metric_snap, **px_kwargs)
+
+            tick_fmt = "+.1f" if diverging else ",.0f"
             fig_map.update_layout(
                 geo=dict(bgcolor=DARK_BG, lakecolor=DARK_BG, landcolor=DARK_CARD,
                          showlakes=True, showcoastlines=False),
                 plot_bgcolor=DARK_BG, paper_bgcolor=DARK_BG,
                 font=dict(color=WHITE),
-                title_font=dict(size=15, color=WHITE),
+                title_font=dict(size=14, color=WHITE),
                 coloraxis_colorbar=dict(
-                    title=dict(text=map_metric, font=dict(color=GRAY, size=11)),
+                    title=dict(text=cbar_title, font=dict(color=GRAY, size=11)),
                     tickfont=dict(color=WHITE), bgcolor=DARK_CARD, bordercolor=DARK_ALT,
+                    tickformat=tick_fmt,
+                    ticksuffix="%" if diverging else "",
                 ),
                 height=480,
                 margin=dict(l=0, r=0, t=50, b=0),
                 dragmode=False,
             )
-            # White state borders + enriched hover
             fig_map.update_traces(
                 selector=dict(type="choropleth"),
                 marker_line_color="white",
                 marker_line_width=0.6,
-                hovertemplate=(
-                    "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
-                    + map_metric + ": %{z:,.1f}<br>"
-                    "vs LY: %{customdata[2]}  (%{customdata[3]})"
-                    "<extra></extra>"
-                ),
+                hovertemplate=hover_tmpl,
             )
 
-            # Transparent overlay covering ALL 50 states so every border
-            # is drawn in white, including states with no data
+            # All-50-states white border overlay
             all_state_abbrs = list(STATE_ABBREV.values())
             fig_map.add_trace(go.Choropleth(
-                locations=all_state_abbrs,
-                locationmode="USA-states",
+                locations=all_state_abbrs, locationmode="USA-states",
                 z=[0] * len(all_state_abbrs),
                 colorscale=[[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]],
                 showscale=False,
-                marker_line_color="white",
-                marker_line_width=0.6,
+                marker_line_color="white", marker_line_width=0.6,
                 hoverinfo="skip",
             ))
 
-            # State value labels via scattergeo
+            # State labels (absolute value or % change depending on mode)
             lbl_lats, lbl_lons, lbl_texts = [], [], []
             for _, row in metric_snap.iterrows():
                 abbr = row["state_abbr"]
                 if abbr in STATE_CENTERS:
                     lbl_lats.append(STATE_CENTERS[abbr][0])
                     lbl_lons.append(STATE_CENTERS[abbr][1])
-                    lbl_texts.append(_bar_label(row["value"], map_metric))
+                    lbl_texts.append(row["lbl_str"] if row["lbl_str"] not in ("N/A", "") else "")
             fig_map.add_trace(go.Scattergeo(
                 lat=lbl_lats, lon=lbl_lons, text=lbl_texts,
                 mode="text",
                 textfont=dict(color=WHITE, size=8, family="Open Sans"),
-                showlegend=False,
-                hoverinfo="skip",
+                showlegend=False, hoverinfo="skip",
             ))
 
             # Map is the filter — click a state to select it
@@ -976,7 +1097,7 @@ with tab_state:
                 fig_map,
                 use_container_width=True,
                 on_select="rerun",
-                key=f"map_{commodity}_{map_year}_{map_metric}",
+                key=f"map_{commodity}_{map_year}_{map_metric}_{map_view}_{comp_year}",
                 config={"scrollZoom": False, "displayModeBar": False},
             )
 
