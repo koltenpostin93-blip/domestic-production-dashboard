@@ -211,6 +211,39 @@ STOCKS_META = {
     "Barley":   {"commodity_desc": "BARLEY",   "unit_desc": "BU"},
 }
 
+# ── Revision Tracker config ──────────────────────────────────────────────────
+# Ordered NASS reference_period_desc values for each metric category
+REVISION_PERIODS_ACRES = [
+    "YEAR - JUN ACREAGE",
+    "YEAR",
+]
+REVISION_PERIODS_YLDPROD = [
+    "YEAR - MAY FORECAST",
+    "YEAR - JUN FORECAST",
+    "YEAR - JUL FORECAST",
+    "YEAR - AUG FORECAST",
+    "YEAR - SEP FORECAST",
+    "YEAR - OCT FORECAST",
+    "YEAR - NOV FORECAST",
+    "YEAR",
+]
+PERIOD_SHORT = {
+    "YEAR - JUN ACREAGE":  "Jun Acreage",
+    "YEAR - MAY FORECAST": "May Fcst",
+    "YEAR - JUN FORECAST": "Jun Fcst",
+    "YEAR - JUL FORECAST": "Jul Fcst",
+    "YEAR - AUG FORECAST": "Aug Fcst",
+    "YEAR - SEP FORECAST": "Sep Fcst",
+    "YEAR - OCT FORECAST": "Oct Fcst",
+    "YEAR - NOV FORECAST": "Nov Fcst",
+    "YEAR":                "Final",
+}
+# 10-step color palette: dark→bright teal, last year = amber
+_REV_PALETTE = [
+    "#1e4a50","#245860","#2b6870","#347a83","#3d8c95",
+    "#479fa8","#51b1bb","#5bbfca","#67d2e0", AMBER,
+]
+
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Domestic Production | JSA",
@@ -639,6 +672,46 @@ def load_stocks_national(commodity: str, quarter: str, y0: int, y1: int,
     df = df.groupby("year", as_index=False)["value"].sum()
     return df[["year", "value"]].sort_values("year")
 
+# ── Revision-history loader ──────────────────────────────────────────────────
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_revision_data(commodity: str, metric: str, y0: int, y1: int,
+                       agg_level: str = "NATIONAL") -> pd.DataFrame:
+    """Fetch every reference_period_desc row for a metric across years.
+    Returns: year, period, value  [+ state_abbr, state_name for STATE level]."""
+    if commodity not in COMMODITIES or metric not in COMMODITIES[commodity]:
+        return pd.DataFrame()
+    mp   = COMMODITIES[commodity][metric]
+    base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
+    df   = _fetch({
+        **base,
+        "agg_level_desc": agg_level,
+        "domain_desc":    "TOTAL",
+        "year__GE":       str(y0),
+        "year__LE":       str(y1),
+    })
+    if df.empty:
+        return pd.DataFrame()
+    df["year"]  = df["year"].astype(int)
+    df["value"] = df["Value"].apply(_clean)
+    df = df.dropna(subset=["value"])
+    df = df[df["value"] > 0]
+    # Sort by load_desc so keep="last" gives the most-recently published estimate
+    if "load_desc" in df.columns:
+        df = df.sort_values("load_desc")
+    if agg_level == "STATE":
+        df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
+        df = df.dropna(subset=["state_abbr"])
+        df = df.drop_duplicates(
+            subset=["year", "reference_period_desc", "state_abbr"], keep="last")
+        return (df[["year","reference_period_desc","value","state_abbr","state_name"]]
+                .rename(columns={"reference_period_desc":"period"})
+                .reset_index(drop=True))
+    else:
+        df = df.drop_duplicates(subset=["year","reference_period_desc"], keep="last")
+        return (df[["year","reference_period_desc","value"]]
+                .rename(columns={"reference_period_desc":"period"})
+                .reset_index(drop=True))
+
 # ── Chart base theme ─────────────────────────────────────────────────────────
 def _base_layout(fig, title="", height=390):
     fig.update_layout(
@@ -704,10 +777,11 @@ with st.spinner("Fetching USDA NASS data..."):
     snap_df = load_state_snapshot(commodity, map_year)
 
 # ── Tabs ─────────────────────────────────────────────────────────────────────
-tab_nat, tab_state, tab_stocks = st.tabs([
+tab_nat, tab_state, tab_stocks, tab_revisions = st.tabs([
     "  📊  National Overview  ",
     "  🗺️  State Level  ",
     "  📦  Quarterly Stocks  ",
+    "  🔄  Revision Tracker  ",
 ])
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -2076,3 +2150,282 @@ with tab_stocks:
                     _base_layout(fig_skv, title=f"{sk_selected_name} vs. U.S. — {sk_quarter} {storage_lbl} Stocks{hist_sfx}", height=380)
                     fig_skv.update_yaxes(tickformat=h_ytick, ticksuffix=h_ysuffix)
                     col_r.plotly_chart(fig_skv, use_container_width=True)
+
+# ═════════════════════════════════════════════════════════════════════════════
+# TAB 4 — REVISION TRACKER
+# ═════════════════════════════════════════════════════════════════════════════
+with tab_revisions:
+    # Map friendly labels → actual COMMODITIES metric keys
+    rev_opts = {}
+    for m in metric_list:
+        if   "Planted"   in m: rev_opts.setdefault("Planted Acres",   m)
+        elif "Harvested" in m: rev_opts.setdefault("Harvested Acres", m)
+        elif "Yield"     in m: rev_opts.setdefault("Yield",           m)
+        elif "Production" in m: rev_opts.setdefault("Production",     m)
+
+    if not rev_opts:
+        st.info(f"No revision data available for {commodity}.")
+    else:
+        # ── Controls row ─────────────────────────────────────────────────────
+        rev_metric_lbl = st.radio(
+            "Revision metric",
+            list(rev_opts.keys()),
+            horizontal=True,
+            label_visibility="collapsed",
+            key="rev_metric",
+        )
+        rev_metric = rev_opts[rev_metric_lbl]
+        st.markdown("<div style='margin-bottom:6px'></div>", unsafe_allow_html=True)
+
+        rev_level = st.radio(
+            "Level",
+            ["National", "State"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="rev_level",
+        )
+        rev_state_abbr = rev_state_name = None
+        if rev_level == "State":
+            _sc, _ = st.columns([3, 9])
+            rev_state_abbr = _sc.selectbox(
+                "State",
+                sorted(STATE_ABBREV.values()),
+                key="rev_state",
+            )
+            rev_state_name = ABBREV_STATE.get(rev_state_abbr, "").title()
+        st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
+
+        # Revision period order for this metric type
+        _is_acres = ("Acres" in rev_metric_lbl)
+        rev_period_list = REVISION_PERIODS_ACRES if _is_acres else REVISION_PERIODS_YLDPROD
+
+        rev_y0 = THIS_YEAR - 9
+        rev_y1 = THIS_YEAR
+
+        # ── Load data ─────────────────────────────────────────────────────────
+        with st.spinner("Loading revision history from USDA NASS..."):
+            rev_df_raw = load_revision_data(
+                commodity, rev_metric, rev_y0, rev_y1,
+                agg_level="STATE" if rev_level == "State" else "NATIONAL",
+            )
+
+        if rev_df_raw.empty:
+            _cm, _cb = st.columns([5, 1])
+            _cm.warning(f"No revision data found for {commodity} — {rev_metric_lbl}.")
+            if _cb.button("🔄 Retry", key="retry_rev"):
+                st.cache_data.clear(); st.rerun()
+        else:
+            # Filter to selected state
+            rev_df = rev_df_raw.copy()
+            if rev_level == "State" and rev_state_abbr:
+                rev_df = rev_df[rev_df["state_abbr"] == rev_state_abbr].copy()
+
+            # Keep only known revision periods and apply short labels
+            rev_df = rev_df[rev_df["period"].isin(rev_period_list)].copy()
+            rev_df["period_lbl"] = rev_df["period"].map(PERIOD_SHORT).fillna(rev_df["period"])
+
+            # Ordered list of labels that are actually present
+            all_labels    = [PERIOD_SHORT.get(p, p) for p in rev_period_list]
+            present_lbls  = [l for l in all_labels if l in rev_df["period_lbl"].unique()]
+
+            rev_df["period_cat"] = pd.Categorical(
+                rev_df["period_lbl"], categories=all_labels, ordered=True)
+            rev_df = rev_df.sort_values(["year", "period_cat"])
+
+            if rev_df.empty or not present_lbls:
+                st.info(
+                    f"NASS does not publish interim {rev_metric_lbl} estimates — "
+                    f"only the final annual value is available for {commodity}."
+                )
+            else:
+                years_avail = sorted(rev_df["year"].unique())
+                n_yrs       = len(years_avail)
+                yr_colors   = (_REV_PALETTE * 2)[:n_yrs]   # cycle if somehow >10
+                yr_colors[-1] = AMBER                       # most recent = amber
+
+                loc_lbl = f" — {rev_state_name}" if rev_state_name else " — U.S. National"
+
+                # ── Section header ────────────────────────────────────────────
+                st.markdown(
+                    f"<p style='color:{GRAY};font-size:12px;font-weight:700;"
+                    f"text-transform:uppercase;letter-spacing:.06em;margin:4px 0 6px'>"
+                    f"10-Year Estimate Revision Path — {rev_metric_lbl}{loc_lbl}</p>",
+                    unsafe_allow_html=True,
+                )
+
+                # ── Chart 1: Line/dot revision paths ─────────────────────────
+                fig_rev = go.Figure()
+                for i, yr in enumerate(years_avail):
+                    ydf = rev_df[rev_df["year"] == yr].sort_values("period_cat")
+                    if ydf.empty: continue
+                    is_latest = (yr == years_avail[-1])
+                    fig_rev.add_trace(go.Scatter(
+                        x=ydf["period_lbl"],
+                        y=ydf["value"],
+                        mode="lines+markers",
+                        name=str(yr),
+                        line=dict(color=yr_colors[i], width=2.5 if is_latest else 1.5),
+                        marker=dict(size=9 if is_latest else 5, color=yr_colors[i]),
+                        opacity=1.0 if is_latest else 0.75,
+                        hovertemplate=(
+                            f"<b>{yr}</b><br>"
+                            "%{x}: %{y:,.2f}" if _is_acres else
+                            f"<b>{yr}</b><br>%{{x}}: %{{y:{_ytick(rev_metric)}}}"
+                        ) + "<extra></extra>",
+                    ))
+
+                _base_layout(fig_rev, height=440)
+                fig_rev.update_layout(
+                    xaxis=dict(
+                        categoryorder="array", categoryarray=present_lbls,
+                        gridcolor="#4a5568", tickfont=dict(color=WHITE, size=11),
+                        title=dict(text="Reporting Period", font=dict(color=GRAY, size=11)),
+                    ),
+                    yaxis=dict(
+                        tickformat=_ytick(rev_metric),
+                        title=dict(text=_tbl_unit(rev_metric), font=dict(color=GRAY, size=11)),
+                    ),
+                    legend=dict(
+                        orientation="h", yanchor="bottom", y=1.02,
+                        xanchor="left", x=0, font=dict(size=11, color=WHITE),
+                    ),
+                    hovermode="x unified",
+                )
+                st.plotly_chart(fig_rev, use_container_width=True)
+
+                # ── Trend callout ─────────────────────────────────────────────
+                if len(present_lbls) >= 2 and "Final" in present_lbls:
+                    _first_lbl   = present_lbls[0]
+                    _completed   = [y for y in years_avail[:-1]][-3:]  # last 3 complete years
+                    _rev_changes = []
+                    for yr in _completed:
+                        _ydf  = rev_df[rev_df["year"] == yr]
+                        _vf   = _ydf.loc[_ydf["period_lbl"] == _first_lbl,  "value"]
+                        _vfin = _ydf.loc[_ydf["period_lbl"] == "Final",     "value"]
+                        if not _vf.empty and not _vfin.empty and _vf.iloc[0] != 0:
+                            _rev_changes.append((_vfin.iloc[0] - _vf.iloc[0]) / _vf.iloc[0] * 100)
+                    if _rev_changes:
+                        _avg_chg   = sum(_rev_changes) / len(_rev_changes)
+                        _all_up    = all(c > 0 for c in _rev_changes)
+                        _all_down  = all(c < 0 for c in _rev_changes)
+                        _direction = "higher" if _avg_chg > 0 else "lower"
+                        _consist   = "consistently" if (_all_up or _all_down) else "generally"
+                        _clr       = GREEN if _avg_chg > 0 else RED
+                        _loc       = f"{rev_state_name} " if rev_state_name else ""
+                        st.markdown(
+                            f"<div style='background:{DARK_CARD};border-left:4px solid {_clr};"
+                            f"border-radius:6px;padding:10px 16px;margin:4px 0 18px'>"
+                            f"<span style='color:{GRAY};font-size:11px;font-weight:700;"
+                            f"text-transform:uppercase;letter-spacing:.05em'>Recent Revision Trend</span><br>"
+                            f"<span style='color:{WHITE};font-size:13px'>"
+                            f"Over the last {len(_rev_changes)} completed crop years, USDA has "
+                            f"{_consist} revised {_loc}<b>{rev_metric_lbl}</b> "
+                            f"<b style='color:{_clr}'>{_direction}</b> from "
+                            f"<b>{_first_lbl}</b> to <b>Final</b> "
+                            f"(average: <b style='color:{_clr}'>{_avg_chg:+.1f}%</b>)."
+                            f"</span></div>",
+                            unsafe_allow_html=True,
+                        )
+
+                # ── Chart 2: Period-to-Period column chart ────────────────────
+                st.markdown("---")
+                st.markdown(
+                    f"<p style='color:{GRAY};font-size:12px;font-weight:700;"
+                    f"text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px'>"
+                    f"Period Comparison — select start &amp; end checkpoints</p>",
+                    unsafe_allow_html=True,
+                )
+
+                if len(present_lbls) >= 2:
+                    _ca, _cb2, _cc = st.columns([2, 2, 2])
+                    _from_lbl = _ca.selectbox(
+                        "From",
+                        present_lbls[:-1],
+                        key="rev_from",
+                    )
+                    _to_opts  = [p for p in present_lbls
+                                 if present_lbls.index(p) > present_lbls.index(_from_lbl)]
+                    _to_lbl   = _cb2.selectbox(
+                        "To",
+                        _to_opts if _to_opts else [present_lbls[-1]],
+                        index=len(_to_opts) - 1 if _to_opts else 0,   # default to farthest end
+                        key="rev_to",
+                    )
+                    _col_view = _cc.radio(
+                        "View as",
+                        ["% Change", "Absolute"],
+                        horizontal=True,
+                        label_visibility="visible",
+                        key="rev_view",
+                    )
+
+                    _comp_rows = []
+                    for yr in years_avail:
+                        _ydf   = rev_df[rev_df["year"] == yr]
+                        _vs    = _ydf.loc[_ydf["period_lbl"] == _from_lbl, "value"]
+                        _ve    = _ydf.loc[_ydf["period_lbl"] == _to_lbl,   "value"]
+                        if not _vs.empty and not _ve.empty:
+                            vs, ve = _vs.iloc[0], _ve.iloc[0]
+                            delta  = ((ve - vs) / vs * 100) if _col_view == "% Change" else (ve - vs)
+                            _comp_rows.append({"year": yr, "delta": delta,
+                                               "v_start": vs, "v_end": ve})
+
+                    if _comp_rows:
+                        _comp_df  = pd.DataFrame(_comp_rows).dropna(subset=["delta"])
+                        _avg_d    = _comp_df["delta"].mean()
+                        _bar_clrs = [GREEN if d >= 0 else RED for d in _comp_df["delta"]]
+
+                        if _col_view == "% Change":
+                            _yt, _ys = "+.1f", "%"
+                            _txt_fn  = lambda d: f"{d:+.1f}%"
+                        else:
+                            _yt, _ys = ",.0f", ""
+                            _txt_fn  = lambda d: _nom_chg_str(d, rev_metric)
+
+                        fig_col = go.Figure()
+                        fig_col.add_trace(go.Bar(
+                            x=_comp_df["year"].astype(str),
+                            y=_comp_df["delta"],
+                            marker_color=_bar_clrs,
+                            text=[_txt_fn(d) for d in _comp_df["delta"]],
+                            textposition="outside",
+                            textfont=dict(color=WHITE, size=11),
+                            hovertemplate=(
+                                "<b>%{x}</b><br>"
+                                + f"{_from_lbl} → {_to_lbl}: %{{y:{_yt}}}{_ys}<br>"
+                                + "From: %{customdata[0]}<br>"
+                                + "To:   %{customdata[1]}"
+                                + "<extra></extra>"
+                            ),
+                            customdata=list(zip(
+                                _comp_df["v_start"].apply(lambda v: _bar_label(v, rev_metric)),
+                                _comp_df["v_end"].apply(lambda v: _bar_label(v, rev_metric)),
+                            )),
+                        ))
+                        # Average line
+                        fig_col.add_hline(
+                            y=_avg_d, line_dash="dash",
+                            line_color=AMBER, line_width=1.5,
+                            annotation_text=f"Avg {_avg_d:+.1f}{_ys}",
+                            annotation_position="top right",
+                            annotation_font_color=AMBER,
+                        )
+                        fig_col.add_hline(y=0, line_color=GRAY, line_width=0.8)
+
+                        _col_title = (
+                            f"{rev_metric_lbl}: {_from_lbl} → {_to_lbl}{loc_lbl}"
+                        )
+                        _base_layout(fig_col, title=_col_title, height=390)
+                        fig_col.update_yaxes(tickformat=_yt, ticksuffix=_ys)
+                        fig_col.update_layout(showlegend=False)
+                        st.plotly_chart(fig_col, use_container_width=True)
+                    else:
+                        st.info(
+                            f"No years with data for both **{_from_lbl}** and **{_to_lbl}**. "
+                            f"Try a different period pair."
+                        )
+                else:
+                    st.info(
+                        "Only one reporting period found in NASS for this metric — "
+                        "period comparisons require at least two checkpoints."
+                    )
