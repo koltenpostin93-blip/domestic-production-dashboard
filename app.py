@@ -136,11 +136,14 @@ LOGO_FULL  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-full.p
 # Keyed by commodity name matching COMMODITIES dict above.
 COMMODITY_TABLE_GROUPS: dict = {
     "Corn": [
-        {"states": ["IL", "IN", "OH", "MI", "KY"], "subtotal": "Eastern Corn Belt"},
-        {"states": ["IA", "NE", "KS"],              "subtotal": "UP States"},
-        {"states": ["MN", "SD", "ND"],              "subtotal": "BN States"},
-        {"states": ["MS", "AR", "LA", "TN"],        "subtotal": "Delta"},
-        {"states": ["WI", "MO", "TX"],              "subtotal": None},
+        {"states": ["IL", "IN", "OH", "MI", "KY"],                                   "subtotal": "Eastern Corn Belt"},
+        {"states": ["IA", "NE", "KS", "CO", "MO"],                                   "subtotal": "Central Plains"},
+        {"states": ["MN", "SD", "ND"],                                                "subtotal": "BN States"},
+        {"states": ["MS", "AR", "LA", "TN"],                                          "subtotal": "Delta"},
+        {"states": ["OK", "TX", "NM"],                                                "subtotal": "Southern Plains"},
+        {"states": ["AL", "GA", "FL", "SC", "NC", "VA"],                             "subtotal": "SE States"},
+        {"states": ["PA", "NY", "MD", "WV", "MA", "VT", "DE", "NJ", "NH", "ME", "CT"], "subtotal": "NE States"},
+        {"states": ["WI"],                                                            "subtotal": None},
     ],
     "Soybeans": [
         {"states": ["IL", "IN", "OH", "MI"],        "subtotal": "Eastern Corn Belt"},
