@@ -238,6 +238,12 @@ PERIOD_SHORT = {
     "YEAR - NOV FORECAST": "Nov Fcst",
     "YEAR":                "Final",
 }
+# Curated checkpoints shown in the period-comparison dropdowns.
+# The line chart always shows every available period; these are the
+# key milestones for the column chart until we confirm more from NASS.
+KEY_CMP_ACRES   = ["Jun Acreage", "Final"]
+KEY_CMP_YLDPROD = ["Jun Fcst", "Aug Fcst", "Nov Fcst", "Final"]
+
 # 10-step color palette: dark→bright teal, last year = amber
 _REV_PALETTE = [
     "#1e4a50","#245860","#2b6870","#347a83","#3d8c95",
@@ -2336,19 +2342,24 @@ with tab_revisions:
                     unsafe_allow_html=True,
                 )
 
-                if len(present_lbls) >= 2:
+                # Only offer curated key checkpoints in the comparison dropdowns;
+                # the line chart above already shows every available period.
+                _key_pool = KEY_CMP_ACRES if _is_acres else KEY_CMP_YLDPROD
+                _cmp_opts = [p for p in _key_pool if p in present_lbls]
+
+                if len(_cmp_opts) >= 2:
                     _ca, _cb2, _cc = st.columns([2, 2, 2])
                     _from_lbl = _ca.selectbox(
                         "From",
-                        present_lbls[:-1],
+                        _cmp_opts[:-1],
                         key="rev_from",
                     )
-                    _to_opts  = [p for p in present_lbls
-                                 if present_lbls.index(p) > present_lbls.index(_from_lbl)]
+                    _to_opts  = [p for p in _cmp_opts
+                                 if _cmp_opts.index(p) > _cmp_opts.index(_from_lbl)]
                     _to_lbl   = _cb2.selectbox(
                         "To",
-                        _to_opts if _to_opts else [present_lbls[-1]],
-                        index=len(_to_opts) - 1 if _to_opts else 0,   # default to farthest end
+                        _to_opts if _to_opts else [_cmp_opts[-1]],
+                        index=len(_to_opts) - 1 if _to_opts else 0,
                         key="rev_to",
                     )
                     _col_view = _cc.radio(
@@ -2426,6 +2437,6 @@ with tab_revisions:
                         )
                 else:
                     st.info(
-                        "Only one reporting period found in NASS for this metric — "
-                        "period comparisons require at least two checkpoints."
+                        "Not enough key checkpoints found in NASS for this metric — "
+                        "try a different commodity or metric."
                     )
