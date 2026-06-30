@@ -1122,16 +1122,28 @@ with tab_state:
                 _rca, _rcb = st.columns(2)
                 _rp_cur_lbl  = _rca.selectbox(
                     "Current Report", _rp_labels,
-                    index=min(len(_rp_labels) - 1, 1),   # default to Jun Acreage (index 1 for Acres)
+                    index=min(len(_rp_labels) - 1, 1),
                     key="rp_cur",
                 )
                 _rp_prev_lbl = _rcb.selectbox(
                     "Prior Report", _rp_labels,
-                    index=0,                              # default to Mar Intentions (index 0)
+                    index=0,
                     key="rp_prev",
                 )
                 _rp_cur_nass  = _rp_nass[_rp_cur_lbl]
                 _rp_prev_nass = _rp_nass[_rp_prev_lbl]
+
+            # ── Change display toggle (comparison modes only) ──────────────────
+            chg_display = "% Change"
+            if map_view in ("vs Last Year", "vs Olympic Avg", "vs Year", "vs Prior Report"):
+                _cd_col, _ = st.columns([2, 8])
+                chg_display = _cd_col.radio(
+                    "Show change as",
+                    ["% Change", "Nominal"],
+                    horizontal=True,
+                    label_visibility="collapsed",
+                    key="chg_display",
+                )
             st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
             # ── Always load LY for hover ──────────────────────────────────────
@@ -1167,9 +1179,9 @@ with tab_state:
                 metric_snap["color_val"] = metric_snap["value"]
                 metric_snap["lbl_str"]   = metric_snap["value"].apply(
                     lambda v: _bar_label(v, map_metric))
-                # hover: value + vs-LY context
                 metric_snap["hover_a"] = metric_snap["chg_pct_str"]
                 metric_snap["hover_b"] = metric_snap["chg_nom_str"]
+                metric_snap["hover_c"] = ""
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
                     + map_metric + ": %{z:,.1f}<br>"
@@ -1178,24 +1190,32 @@ with tab_state:
                 )
 
             elif map_view == "vs Last Year":
-                metric_snap["color_val"] = metric_snap["chg_pct"]
-                metric_snap["lbl_str"]   = metric_snap["chg_pct"].apply(_pct_str)
-                metric_snap["hover_a"]   = metric_snap["value"].apply(
-                    lambda v: _bar_label(v, map_metric))
-                metric_snap["hover_b"]   = metric_snap["prior_value"].apply(
+                _diff = metric_snap["value"] - metric_snap["prior_value"]
+                _pct  = _diff / metric_snap["prior_value"] * 100
+                if chg_display == "% Change":
+                    metric_snap["color_val"] = _pct
+                    metric_snap["lbl_str"]   = _pct.apply(_pct_str)
+                    cbar_title = "% vs Last Year"
+                else:
+                    metric_snap["color_val"] = _diff
+                    metric_snap["lbl_str"]   = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
+                    cbar_title = f"Chg vs LY ({_tbl_unit(map_metric)})"
+                metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
+                metric_snap["hover_b"] = metric_snap["prior_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
+                metric_snap["hover_c"] = _pct.apply(_pct_str) + "  (" + _diff.apply(
+                    lambda v: _nom_chg_str(v, map_metric)) + ")"
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
-                    "vs LY: <b>%{z:+.1f}%</b><br>"
+                    f"vs LY: %{{customdata[4]}}<br>"
                     f"{map_year}: %{{customdata[2]}}<br>"
                     f"{map_year - 1}: %{{customdata[3]}}"
                     "<extra></extra>"
                 )
                 diverging  = True
-                cbar_title = "% vs Last Year"
 
             elif map_view == "vs Olympic Avg":
-                hist_y0 = map_year - 5   # 6 years: map_year-5 … map_year
+                hist_y0 = map_year - 5
                 with st.spinner("Loading history for olympic average..."):
                     avg_hist = load_state_history(commodity, map_metric, hist_y0, map_year)
                 avg_by_state = {}
@@ -1207,25 +1227,30 @@ with tab_state:
                             for yr in range(hist_y0, map_year + 1)
                         ]
                         avg_by_state[abbr] = _olympic6(vals)
-                metric_snap["state_avg"]  = metric_snap["state_abbr"].map(avg_by_state)
-                metric_snap["color_val"]  = (
-                    (metric_snap["value"] - metric_snap["state_avg"])
-                    / metric_snap["state_avg"] * 100
-                )
-                metric_snap["lbl_str"]    = metric_snap["color_val"].apply(_pct_str)
-                metric_snap["hover_a"]    = metric_snap["value"].apply(
-                    lambda v: _bar_label(v, map_metric))
-                metric_snap["hover_b"]    = metric_snap["state_avg"].apply(
+                metric_snap["state_avg"] = metric_snap["state_abbr"].map(avg_by_state)
+                _diff = metric_snap["value"] - metric_snap["state_avg"]
+                _pct  = _diff / metric_snap["state_avg"] * 100
+                if chg_display == "% Change":
+                    metric_snap["color_val"] = _pct
+                    metric_snap["lbl_str"]   = _pct.apply(_pct_str)
+                    cbar_title = "% vs Olympic Avg"
+                else:
+                    metric_snap["color_val"] = _diff
+                    metric_snap["lbl_str"]   = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
+                    cbar_title = f"Chg vs Olympic Avg ({_tbl_unit(map_metric)})"
+                metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
+                metric_snap["hover_b"] = metric_snap["state_avg"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
+                metric_snap["hover_c"] = _pct.apply(_pct_str) + "  (" + _diff.apply(
+                    lambda v: _nom_chg_str(v, map_metric)) + ")"
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
-                    "vs Olympic Avg: <b>%{z:+.1f}%</b><br>"
+                    "vs Olympic Avg: %{customdata[4]}<br>"
                     f"{map_year}: %{{customdata[2]}}<br>"
                     "Olympic Avg: %{customdata[3]}"
                     "<extra></extra>"
                 )
                 diverging  = True
-                cbar_title = "% vs Olympic Avg"
 
             elif map_view == "vs Year":
                 with st.spinner(f"Loading {comp_year} data..."):
@@ -1237,24 +1262,29 @@ with tab_state:
                     else pd.DataFrame(columns=["state_abbr", "comp_value"])
                 )
                 metric_snap = metric_snap.merge(comp_metric, on="state_abbr", how="left")
-                metric_snap["color_val"] = (
-                    (metric_snap["value"] - metric_snap["comp_value"])
-                    / metric_snap["comp_value"] * 100
-                )
-                metric_snap["lbl_str"]   = metric_snap["color_val"].apply(_pct_str)
-                metric_snap["hover_a"]   = metric_snap["value"].apply(
-                    lambda v: _bar_label(v, map_metric))
-                metric_snap["hover_b"]   = metric_snap["comp_value"].apply(
+                _diff = metric_snap["value"] - metric_snap["comp_value"]
+                _pct  = _diff / metric_snap["comp_value"] * 100
+                if chg_display == "% Change":
+                    metric_snap["color_val"] = _pct
+                    metric_snap["lbl_str"]   = _pct.apply(_pct_str)
+                    cbar_title = f"% vs {comp_year}"
+                else:
+                    metric_snap["color_val"] = _diff
+                    metric_snap["lbl_str"]   = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
+                    cbar_title = f"Chg vs {comp_year} ({_tbl_unit(map_metric)})"
+                metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
+                metric_snap["hover_b"] = metric_snap["comp_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
+                metric_snap["hover_c"] = _pct.apply(_pct_str) + "  (" + _diff.apply(
+                    lambda v: _nom_chg_str(v, map_metric)) + ")"
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
-                    f"vs {comp_year}: <b>%{{z:+.1f}}%</b><br>"
+                    f"vs {comp_year}: %{{customdata[4]}}<br>"
                     f"{map_year}: %{{customdata[2]}}<br>"
                     f"{comp_year}: %{{customdata[3]}}"
                     "<extra></extra>"
                 )
                 diverging  = True
-                cbar_title = f"% vs {comp_year}"
 
             else:   # vs Prior Report
                 with st.spinner(f"Loading {_rp_cur_lbl} and {_rp_prev_lbl} data..."):
@@ -1267,24 +1297,29 @@ with tab_state:
                 metric_snap["value"]      = metric_snap["state_abbr"].map(_rp_cur_vals)
                 metric_snap["comp_value"] = metric_snap["state_abbr"].map(_rp_prev_vals)
                 metric_snap = metric_snap.dropna(subset=["value", "comp_value"])
-                metric_snap["color_val"] = (
-                    (metric_snap["value"] - metric_snap["comp_value"])
-                    / metric_snap["comp_value"] * 100
-                )
-                metric_snap["lbl_str"] = metric_snap["color_val"].apply(_pct_str)
-                metric_snap["hover_a"] = metric_snap["value"].apply(
-                    lambda v: _bar_label(v, map_metric))
+                _diff = metric_snap["value"] - metric_snap["comp_value"]
+                _pct  = _diff / metric_snap["comp_value"] * 100
+                if chg_display == "% Change":
+                    metric_snap["color_val"] = _pct
+                    metric_snap["lbl_str"]   = _pct.apply(_pct_str)
+                    cbar_title = f"% vs {_rp_prev_lbl}"
+                else:
+                    metric_snap["color_val"] = _diff
+                    metric_snap["lbl_str"]   = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
+                    cbar_title = f"Chg vs {_rp_prev_lbl} ({_tbl_unit(map_metric)})"
+                metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["comp_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
+                metric_snap["hover_c"] = _pct.apply(_pct_str) + "  (" + _diff.apply(
+                    lambda v: _nom_chg_str(v, map_metric)) + ")"
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
-                    f"vs {_rp_prev_lbl}: <b>%{{z:+.1f}}%</b><br>"
+                    f"vs {_rp_prev_lbl}: %{{customdata[4]}}<br>"
                     f"{_rp_cur_lbl}: %{{customdata[2]}}<br>"
                     f"{_rp_prev_lbl}: %{{customdata[3]}}"
                     "<extra></extra>"
                 )
                 diverging  = True
-                cbar_title = f"% vs {_rp_prev_lbl}"
 
             # Diverging scale: red ← 0 → green, symmetric range
             if diverging:
@@ -1301,7 +1336,7 @@ with tab_state:
                 color_continuous_scale=map_cscale,
                 hover_name="state_name",
                 hover_data={"color_val": False, "state_abbr": False},
-                custom_data=["state_abbr", "state_name", "hover_a", "hover_b"],
+                custom_data=["state_abbr", "state_name", "hover_a", "hover_b", "hover_c"],
                 labels={"color_val": cbar_title},
                 title=f"{commodity} — {map_metric} by State ({map_year})  [{cbar_title}]",
             )
@@ -1310,7 +1345,7 @@ with tab_state:
 
             fig_map = px.choropleth(metric_snap, **px_kwargs)
 
-            tick_fmt = "+.1f" if diverging else ",.0f"
+            tick_fmt = "+.1f" if (diverging and chg_display == "% Change") else ",.0f"
             fig_map.update_layout(
                 geo=dict(bgcolor=DARK_BG, lakecolor=DARK_BG, landcolor=DARK_CARD,
                          showlakes=True, showcoastlines=False),
@@ -1321,7 +1356,7 @@ with tab_state:
                     title=dict(text=cbar_title, font=dict(color=GRAY, size=11)),
                     tickfont=dict(color=WHITE), bgcolor=DARK_CARD, bordercolor=DARK_ALT,
                     tickformat=tick_fmt,
-                    ticksuffix="%" if diverging else "",
+                    ticksuffix="%" if (diverging and chg_display == "% Change") else "",
                 ),
                 height=480,
                 margin=dict(l=0, r=0, t=50, b=0),
