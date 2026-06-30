@@ -1159,23 +1159,18 @@ with tab_state:
                 _rp_cur_nass  = _rp_nass[_rp_cur_lbl]
                 _rp_prev_nass = _rp_nass[_rp_prev_lbl]
 
-            # ── Change display toggles (comparison modes only) ─────────────────
+            # ── Change display toggle (comparison modes only) ──────────────────
             chg_display = "% Change"
-            lbl_display = "% Change"
             if map_view in ("vs Last Year", "vs Olympic Avg", "vs Year", "vs Prior Report"):
-                _cd_a, _cd_b, _ = st.columns([2, 2, 6])
-                chg_display = _cd_a.radio(
-                    "Map color:",
+                _cd_col, _ = st.columns([2, 8])
+                chg_display = _cd_col.radio(
+                    "Show change as",
                     ["% Change", "Nominal"],
                     horizontal=True,
+                    label_visibility="collapsed",
                     key="chg_display",
                 )
-                lbl_display = _cd_b.radio(
-                    "Map labels:",
-                    ["% Change", "Nominal"],
-                    horizontal=True,
-                    key="lbl_display",
-                )
+            lbl_display = chg_display
             st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
             # ── Always load LY for hover ──────────────────────────────────────
