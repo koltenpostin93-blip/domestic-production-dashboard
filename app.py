@@ -204,6 +204,13 @@ COMMODITY_TABLE_GROUPS: dict = {
 
 # ── Quarterly Stocks config ───────────────────────────────────────────────────
 STOCKS_QUARTERS = ["DEC 1", "MAR 1", "JUN 1", "SEP 1"]
+# NASS stores these as "FIRST OF ..." — map display label → API value
+STOCKS_QUARTERS_API = {
+    "DEC 1": "FIRST OF DEC",
+    "MAR 1": "FIRST OF MAR",
+    "JUN 1": "FIRST OF JUN",
+    "SEP 1": "FIRST OF SEP",
+}
 
 # Commodities that have quarterly grain stocks in NASS; maps to API params
 STOCKS_META = {
@@ -620,10 +627,10 @@ def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.Data
 # ── Quarterly stocks loaders ─────────────────────────────────────────────────
 def _stocks_base(commodity: str, quarter: str) -> dict:
     meta = STOCKS_META[commodity]
-    # domain_desc="TOTAL" is required — without it the API returns zero rows.
-    # freq_desc intentionally omitted — NASS stocks reports don't use "QUARTERLY".
+    # NASS stores quarterly stocks as "FIRST OF MAR" etc., not "MAR 1".
+    api_period = STOCKS_QUARTERS_API.get(quarter, quarter)
     return {**meta, "statisticcat_desc": "STOCKS", "source_desc": "SURVEY",
-            "domain_desc": "TOTAL", "reference_period_desc": quarter}
+            "domain_desc": "TOTAL", "reference_period_desc": api_period}
 
 def _filter_storage(df: pd.DataFrame, storage: str) -> pd.DataFrame:
     """Filter a raw NASS stocks DataFrame by storage location via class_desc."""
