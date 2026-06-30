@@ -211,6 +211,13 @@ STOCKS_QUARTERS_API = {
     "JUN 1": "FIRST OF JUN",
     "SEP 1": "FIRST OF SEP",
 }
+# Maps each quarter to (prior_quarter_label, year_delta) for "vs Last Report"
+PREV_QUARTER = {
+    "DEC 1": ("SEP 1",  0),
+    "MAR 1": ("DEC 1", -1),
+    "JUN 1": ("MAR 1",  0),
+    "SEP 1": ("JUN 1",  0),
+}
 
 # Commodities that have quarterly grain stocks in NASS; maps to API params
 STOCKS_META = {
@@ -1657,6 +1664,14 @@ with tab_stocks:
                 key="sk_view",
             )
             pct_mode = (sk_view == "% of Total")
+
+        sk_cmp = st.radio(
+            "Compare to",
+            ["vs Last Year", "vs Last Report"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="sk_cmp",
+        )
         st.markdown("<div style='margin-bottom:8px'></div>", unsafe_allow_html=True)
 
         # ── Display-value helpers ─────────────────────────────────────────────
@@ -1668,13 +1683,22 @@ with tab_stocks:
         def _sk_bar_lbl(v):
             return f"{v:.1f}%" if pct_mode else _bar_label(v, sk_metric)
 
-        # ── Load snapshot + prior year ────────────────────────────────────────
+        # ── Resolve comparison period ─────────────────────────────────────────
+        if sk_cmp == "vs Last Report":
+            _prev_q, _prev_yr_delta = PREV_QUARTER[sk_quarter]
+            _prev_yr  = stocks_year + _prev_yr_delta
+            _cmp_label = f"{_prev_q} {_prev_yr}"
+        else:
+            _prev_q, _prev_yr = sk_quarter, stocks_year - 1
+            _cmp_label = str(stocks_year - 1)
+
+        # ── Load snapshot + comparison period ────────────────────────────────
         with st.spinner("Fetching USDA NASS stocks data..."):
             sk_snap       = load_stocks_snapshot(commodity, sk_quarter, stocks_year, storage_param)
-            sk_snap_prior = load_stocks_snapshot(commodity, sk_quarter, stocks_year - 1, storage_param)
+            sk_snap_prior = load_stocks_snapshot(commodity, _prev_q, _prev_yr, storage_param)
             if pct_mode:
                 sk_tot_snap       = load_stocks_snapshot(commodity, sk_quarter, stocks_year, "TOTAL")
-                sk_tot_snap_prior = load_stocks_snapshot(commodity, sk_quarter, stocks_year - 1, "TOTAL")
+                sk_tot_snap_prior = load_stocks_snapshot(commodity, _prev_q, _prev_yr, "TOTAL")
             else:
                 sk_tot_snap = sk_tot_snap_prior = pd.DataFrame()
 
@@ -1765,7 +1789,7 @@ with tab_stocks:
                 hovertemplate=(
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
                     + cbar_title + f": %{{z:{hover_val_fmt}}}{hover_val_sfx}<br>"
-                    "vs LY: %{customdata[2]}  (%{customdata[3]})<extra></extra>"
+                    f"vs {_cmp_label}: " + "%{customdata[2]}  (%{customdata[3]})<extra></extra>"
                 ),
             )
             # All-states outline
@@ -1932,7 +1956,7 @@ with tab_stocks:
 
                 sk_cur_yr, sk_prev_yr = sk_years[-1], sk_years[-2]
 
-                def _sk_row(label, yr_map, row_type="state"):
+                def _sk_row(label, yr_map, row_type="state", prior_override=None):
                     row = {"label": label, "row_type": row_type}
                     all_vals = []
                     for yr in sk_years:
@@ -1941,12 +1965,11 @@ with tab_stocks:
                     recent6 = [yr_map.get(yr) for yr in sk_years[-6:]]
                     olym    = _olympic6(recent6)
                     cur_v   = yr_map.get(sk_cur_yr)
-                    prev_v  = yr_map.get(sk_prev_yr)
+                    prev_v  = prior_override if prior_override is not None else yr_map.get(sk_prev_yr)
                     row["olym"]       = olym
                     row["min_val"]    = min(all_vals) if all_vals else None
                     row["max_val"]    = max(all_vals) if all_vals else None
                     row["pct_us"]     = (olym / sk_nat_olym * 100) if (olym and sk_nat_olym) else None
-                    # % vs LY: ppt change in pct_mode, relative % change otherwise
                     if pct_mode:
                         row["chg_vs_ly"] = (cur_v - prev_v) if (cur_v is not None and prev_v is not None) else None
                     else:
@@ -1954,21 +1977,38 @@ with tab_stocks:
                     row["pct_of_avg"] = (cur_v / olym * 100) if (cur_v and olym) else None
                     return row
 
+                # Build prior-quarter lookup for "vs Last Report" mode
+                _sk_prev_q_st: dict = {}
+                _sk_prev_q_nat: float | None = None
+                if sk_cmp == "vs Last Report" and not sk_snap_prior.empty:
+                    for _, _r in sk_snap_prior.iterrows():
+                        _sk_prev_q_st[_r["state_abbr"]] = _r["value"]
+                    _nat_pq = load_stocks_national(
+                        commodity, _prev_q, _prev_yr, _prev_yr, storage_param)
+                    _sk_prev_q_nat = _nat_pq["value"].iloc[0] if not _nat_pq.empty else None
+
                 sk_rows = []
                 for g_idx, grp in enumerate(_sk_active_groups):
                     grp_states = grp["states"]
                     for abbr in grp_states:
-                        sk_rows.append(_sk_row(abbr, sk_state_yr.get(abbr, {}), "state"))
+                        po = _sk_prev_q_st.get(abbr) if sk_cmp == "vs Last Report" else None
+                        sk_rows.append(_sk_row(abbr, sk_state_yr.get(abbr, {}), "state", po))
                     if grp["subtotal"] and len(grp_states) > 1:
                         sub_yr = {}
                         for yr in sk_years:
                             vals  = [sk_state_yr.get(a, {}).get(yr) for a in grp_states]
                             valid = [v for v in vals if v is not None]
                             sub_yr[yr] = sum(valid) if valid else None
-                        sk_rows.append(_sk_row(grp["subtotal"], sub_yr, "subtotal"))
+                        if sk_cmp == "vs Last Report":
+                            sub_po = sum(_sk_prev_q_st.get(a, 0) for a in grp_states
+                                         if _sk_prev_q_st.get(a)) or None
+                        else:
+                            sub_po = None
+                        sk_rows.append(_sk_row(grp["subtotal"], sub_yr, "subtotal", sub_po))
                     if g_idx < len(_sk_active_groups) - 1:
                         sk_rows.append({"row_type": "spacer"})
-                sk_rows.append(_sk_row("US Total", {yr: sk_nat_yr.get(yr) for yr in sk_years}, "us"))
+                us_po = _sk_prev_q_nat if sk_cmp == "vs Last Report" else None
+                sk_rows.append(_sk_row("US Total", {yr: sk_nat_yr.get(yr) for yr in sk_years}, "us", us_po))
 
                 # ── Render table (same style as production table) ─────────────
                 _TH  = (f"padding:7px 9px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
@@ -1985,7 +2025,7 @@ with tab_stocks:
                         f"font-weight:700;font-size:11px;white-space:nowrap;"
                         f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
 
-                chg_hdr    = "ppt vs LY" if pct_mode else "% vs LY"
+                chg_hdr    = f"ppt vs {_cmp_label}" if pct_mode else f"% vs {_cmp_label}"
                 yr_hdrs    = "".join(f"<th style='{_TH}'>{yr}</th>" for yr in sk_years)
                 sk_thead   = (f"<thead><tr><th style='{_TH0}'>State / Region</th>{yr_hdrs}"
                               f"<th style='{_THD}'>{chg_hdr}</th>"
