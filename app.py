@@ -408,7 +408,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ── API helpers ──────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def _fetch(params: dict) -> pd.DataFrame:
     p = {**params, "key": API_KEY, "format": "JSON"}
     for attempt in range(2):
@@ -529,7 +529,7 @@ def _prefer_all_classes(df: pd.DataFrame) -> pd.DataFrame:
     all_cls = df[df["class_desc"].str.upper().str.strip() == "ALL CLASSES"]
     return all_cls if not all_cls.empty else df
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_national(commodity: str, y0: int, y1: int) -> pd.DataFrame:
     params_map = COMMODITIES[commodity]
     frames = []
@@ -564,7 +564,7 @@ PERIOD_PRIORITY = [
     "YEAR - JUL FORECAST",
 ]
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_state_snapshot(commodity: str, year: int) -> pd.DataFrame:
     params_map = COMMODITIES[commodity]
     frames = []
@@ -602,7 +602,7 @@ def load_state_snapshot(commodity: str, year: int) -> pd.DataFrame:
         frames.append(result[["state_name", "state_abbr", "value", "metric"]])
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.DataFrame:
     mp = COMMODITIES[commodity][metric]
     df = _fetch({
@@ -638,7 +638,7 @@ def _filter_storage(df: pd.DataFrame, storage: str) -> pd.DataFrame:
         return df
     return df[df["class_desc"].str.upper() == storage]
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_stocks_snapshot(commodity: str, quarter: str, year: int,
                          storage: str = "TOTAL") -> pd.DataFrame:
     if commodity not in STOCKS_META:
@@ -655,7 +655,7 @@ def load_stocks_snapshot(commodity: str, quarter: str, year: int,
     df = df.groupby(["state_name", "state_abbr"], as_index=False)["value"].sum()
     return df[["state_name", "state_abbr", "value"]].copy()
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_stocks_history(commodity: str, quarter: str, y0: int, y1: int,
                         storage: str = "TOTAL") -> pd.DataFrame:
     if commodity not in STOCKS_META:
@@ -672,7 +672,7 @@ def load_stocks_history(commodity: str, quarter: str, y0: int, y1: int,
     df = df.groupby(["year", "state_abbr", "state_name"], as_index=False)["value"].sum()
     return df[["year", "value", "state_abbr", "state_name"]].sort_values(["state_abbr", "year"])
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_stocks_national(commodity: str, quarter: str, y0: int, y1: int,
                          storage: str = "TOTAL") -> pd.DataFrame:
     if commodity not in STOCKS_META:
@@ -689,7 +689,7 @@ def load_stocks_national(commodity: str, quarter: str, y0: int, y1: int,
     return df[["year", "value"]].sort_values("year")
 
 # ── Revision-history loader ──────────────────────────────────────────────────
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_revision_data(commodity: str, metric: str, y0: int, y1: int,
                        agg_level: str = "NATIONAL") -> pd.DataFrame:
     """Fetch every reference_period_desc row for a metric across years.
