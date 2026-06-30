@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import plotly.express as px
 import requests
 from datetime import date
+from io import BytesIO
 
 # ── Constants ────────────────────────────────────────────────────────────────
 API_KEY   = st.secrets["NASS_API_KEY"]
@@ -438,6 +439,63 @@ def _clean(val) -> float | None:
         return float(str(val).replace(",", "").strip())
     except Exception:
         return None
+
+def _table_to_excel(rows: list, years: list, chg_label: str, title: str) -> bytes:
+    """Convert table row dicts to a formatted Excel workbook and return bytes."""
+    records = []
+    for row in rows:
+        if row.get("row_type") == "spacer":
+            continue
+        rec = {"State / Region": row.get("label", "")}
+        for yr in years:
+            rec[str(yr)] = row.get(yr)
+        rec[chg_label]        = row.get("chg_vs_ly")
+        rec["6-Yr Olympic Avg"] = row.get("olym")
+        rec["% of Avg"]        = row.get("pct_of_avg")
+        rec["Min"]             = row.get("min_val")
+        rec["Max"]             = row.get("max_val")
+        rec["% of U.S."]       = row.get("pct_us")
+        records.append(rec)
+    df = pd.DataFrame(records)
+    buf = BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name=title[:31])
+        ws = writer.sheets[title[:31]]
+        # Auto-fit column widths
+        for col in ws.columns:
+            max_len = max((len(str(c.value)) if c.value is not None else 0) for c in col)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 20)
+    return buf.getvalue()
+
+def _render_export_buttons(rows: list, years: list, chg_label: str,
+                           filename_stem: str, title: str):
+    """Render Excel download + copyable dataframe expander for a table."""
+    xlsx_bytes = _table_to_excel(rows, years, chg_label, title)
+    c1, c2 = st.columns([1, 5])
+    c1.download_button(
+        "📥 Export to Excel",
+        data=xlsx_bytes,
+        file_name=f"{filename_stem}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        key=f"dl_{filename_stem}",
+    )
+    with c2.expander("📋 Copy-friendly table (for email / paste)"):
+        records = []
+        for row in rows:
+            if row.get("row_type") == "spacer":
+                continue
+            rec = {"State / Region": row.get("label", "")}
+            for yr in years:
+                v = row.get(yr)
+                rec[str(yr)] = round(v, 2) if v is not None else None
+            rec[chg_label]          = (round(row["chg_vs_ly"], 1)
+                                       if row.get("chg_vs_ly") is not None else None)
+            rec["6-Yr Olympic Avg"] = (round(row["olym"], 2)
+                                       if row.get("olym") is not None else None)
+            rec["% of Avg"]         = (round(row["pct_of_avg"], 1)
+                                       if row.get("pct_of_avg") is not None else None)
+            records.append(rec)
+        st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
 
 def _fmt(v: float, metric: str) -> str:
     if "Yield" in metric or "/Ac" in metric:
@@ -1525,12 +1583,13 @@ with tab_state:
                         f"font-weight:700;font-size:11px;white-space:nowrap;"
                         f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
 
+                chg_hdr_lbl = "% vs LY"
                 yr_hdrs    = "".join(f"<th style='{_TH}'>{yr}</th>" for yr in tbl_years_list)
                 thead_html = (
                     f"<thead><tr>"
                     f"<th style='{_TH0}'>State / Region</th>"
                     f"{yr_hdrs}"
-                    f"<th style='{_THD}'>% vs LY</th>"
+                    f"<th style='{_THD}'>{chg_hdr_lbl}</th>"
                     f"<th style='{_THS}'>6-Yr Olympic Avg</th>"
                     f"<th style='{_THP}'>% of Avg</th>"
                     f"<th style='{_THS}'>Min</th>"
@@ -1651,10 +1710,16 @@ with tab_state:
 
                 st.markdown(
                     f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;"
-                    f"margin-bottom:20px;'>"
+                    f"margin-bottom:12px;'>"
                     f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif;'>"
                     f"{thead_html}<tbody>{tbody_html}</tbody></table></div>",
                     unsafe_allow_html=True,
+                )
+                _render_export_buttons(
+                    tbl_rows, tbl_years_list,
+                    chg_hdr_lbl,
+                    f"{commodity}_{map_metric}_{map_year}".replace(" ", "_").replace("/", ""),
+                    f"{commodity} {map_metric} {map_year}",
                 )
 
             # ── State historical section ──────────────────────────────────────
@@ -2229,10 +2294,16 @@ with tab_stocks:
 
                 st.markdown(
                     f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;"
-                    f"margin-bottom:20px;'>"
+                    f"margin-bottom:12px;'>"
                     f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif;'>"
                     f"{sk_thead}<tbody>{sk_tbody}</tbody></table></div>",
                     unsafe_allow_html=True,
+                )
+                _render_export_buttons(
+                    sk_rows, sk_years,
+                    chg_hdr,
+                    f"{commodity}_stocks_{sk_quarter}_{stocks_year}".replace(" ", "_"),
+                    f"{commodity} Stocks {sk_quarter} {stocks_year}",
                 )
 
             # ── State historical stocks ───────────────────────────────────────
