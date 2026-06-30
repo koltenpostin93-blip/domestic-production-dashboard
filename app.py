@@ -147,17 +147,17 @@ COMMODITY_TABLE_GROUPS: dict = {
         {"states": ["WI"],                                                            "subtotal": None},
     ],
     "Soybeans": [
-        {"states": ["IL", "IN", "OH", "MI"],        "subtotal": "Eastern Corn Belt"},
+        {"states": ["IL", "IN", "OH", "MI", "KY"],  "subtotal": "Eastern Corn Belt"},
         {"states": ["IA", "MN", "MO"],              "subtotal": "Western Corn Belt"},
         {"states": ["ND", "SD", "NE", "KS"],        "subtotal": "Northern Plains"},
         {"states": ["AR", "MS", "TN", "LA"],        "subtotal": "Delta"},
-        {"states": ["WI", "KY"],                    "subtotal": None},
+        {"states": ["WI"],                          "subtotal": None},
     ],
     "Wheat": [
         {"states": ["KS", "OK", "TX"],              "subtotal": "Southern Plains (HRW)"},
         {"states": ["CO", "NE", "SD"],              "subtotal": "Central Plains (HRW)"},
         {"states": ["WA", "OR", "ID"],              "subtotal": "Pacific Northwest"},
-        {"states": ["IL", "IN", "OH", "MI"],        "subtotal": "Eastern SRW Belt"},
+        {"states": ["IL", "IN", "OH", "MI", "KY"],  "subtotal": "Eastern SRW Belt"},
         {"states": ["MT", "ND"],                    "subtotal": None},
     ],
     "Cotton": [
