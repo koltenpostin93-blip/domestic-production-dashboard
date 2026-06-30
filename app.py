@@ -440,7 +440,8 @@ def _clean(val) -> float | None:
     except Exception:
         return None
 
-def _table_to_excel(rows: list, years: list, chg_label: str, title: str) -> bytes:
+def _table_to_excel(rows: list, years: list, chg_label: str, title: str,
+                    prior_lbl: str | None = None) -> bytes:
     """Convert table row dicts to a formatted Excel workbook and return bytes."""
     records = []
     for row in rows:
@@ -449,28 +450,31 @@ def _table_to_excel(rows: list, years: list, chg_label: str, title: str) -> byte
         rec = {"State / Region": row.get("label", "")}
         for yr in years:
             rec[str(yr)] = row.get(yr)
-        rec[chg_label]        = row.get("chg_vs_ly")
+        rec[chg_label]          = row.get("chg_vs_ly")
         rec["6-Yr Olympic Avg"] = row.get("olym")
-        rec["% of Avg"]        = row.get("pct_of_avg")
-        rec["Min"]             = row.get("min_val")
-        rec["Max"]             = row.get("max_val")
-        rec["% of U.S."]       = row.get("pct_us")
+        rec["% of Avg"]         = row.get("pct_of_avg")
+        rec["Min"]              = row.get("min_val")
+        rec["Max"]              = row.get("max_val")
+        rec["% of U.S."]        = row.get("pct_us")
+        if prior_lbl:
+            rec[prior_lbl]              = row.get("prior_rpt_val")
+            rec[f"Chg vs {prior_lbl}"]  = row.get("chg_vs_prior_rpt")
         records.append(rec)
     df = pd.DataFrame(records)
     buf = BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name=title[:31])
         ws = writer.sheets[title[:31]]
-        # Auto-fit column widths
         for col in ws.columns:
             max_len = max((len(str(c.value)) if c.value is not None else 0) for c in col)
             ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 20)
     return buf.getvalue()
 
 def _render_export_buttons(rows: list, years: list, chg_label: str,
-                           filename_stem: str, title: str):
+                           filename_stem: str, title: str,
+                           prior_lbl: str | None = None):
     """Render Excel download + copyable dataframe expander for a table."""
-    xlsx_bytes = _table_to_excel(rows, years, chg_label, title)
+    xlsx_bytes = _table_to_excel(rows, years, chg_label, title, prior_lbl=prior_lbl)
     c1, c2 = st.columns([1, 5])
     c1.download_button(
         "📥 Export to Excel",
@@ -494,6 +498,11 @@ def _render_export_buttons(rows: list, years: list, chg_label: str,
                                        if row.get("olym") is not None else None)
             rec["% of Avg"]         = (round(row["pct_of_avg"], 1)
                                        if row.get("pct_of_avg") is not None else None)
+            if prior_lbl:
+                pv = row.get("prior_rpt_val")
+                cv = row.get("chg_vs_prior_rpt")
+                rec[prior_lbl]             = round(pv, 2) if pv is not None else None
+                rec[f"Chg vs {prior_lbl}"] = round(cv, 2) if cv is not None else None
             records.append(rec)
         st.dataframe(pd.DataFrame(records), use_container_width=True, hide_index=True)
 
@@ -724,6 +733,23 @@ def load_period_snapshot(commodity: str, metric: str, year: int, period: str) ->
     df = df.dropna(subset=["value", "state_abbr"])
     df = df[df["value"] > 0]
     return df[["state_name", "state_abbr", "value"]].copy()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_national_period_snapshot(commodity: str, metric: str, year: int, period: str) -> float | None:
+    """Fetch the US national total for a specific NASS reference_period_desc."""
+    if commodity not in COMMODITIES or metric not in COMMODITIES[commodity]:
+        return None
+    mp   = COMMODITIES[commodity][metric]
+    base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
+    df   = _fetch({**base, "agg_level_desc": "NATIONAL", "domain_desc": "TOTAL",
+                   "reference_period_desc": period, "year": str(year)})
+    if df.empty:
+        return None
+    df = _prefer_all_classes(df)
+    df["value"] = df["Value"].apply(_clean)
+    df = df.dropna(subset=["value"])
+    df = df[df["value"] > 0]
+    return float(df["value"].iloc[0]) if not df.empty else None
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.DataFrame:
@@ -1133,16 +1159,22 @@ with tab_state:
                 _rp_cur_nass  = _rp_nass[_rp_cur_lbl]
                 _rp_prev_nass = _rp_nass[_rp_prev_lbl]
 
-            # ── Change display toggle (comparison modes only) ──────────────────
+            # ── Change display toggles (comparison modes only) ─────────────────
             chg_display = "% Change"
+            lbl_display = "% Change"
             if map_view in ("vs Last Year", "vs Olympic Avg", "vs Year", "vs Prior Report"):
-                _cd_col, _ = st.columns([2, 8])
-                chg_display = _cd_col.radio(
-                    "Show change as",
+                _cd_a, _cd_b, _ = st.columns([2, 2, 6])
+                chg_display = _cd_a.radio(
+                    "Map color:",
                     ["% Change", "Nominal"],
                     horizontal=True,
-                    label_visibility="collapsed",
                     key="chg_display",
+                )
+                lbl_display = _cd_b.radio(
+                    "Map labels:",
+                    ["% Change", "Nominal"],
+                    horizontal=True,
+                    key="lbl_display",
                 )
             st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
@@ -1194,12 +1226,14 @@ with tab_state:
                 _pct  = _diff / metric_snap["prior_value"] * 100
                 if chg_display == "% Change":
                     metric_snap["color_val"] = _pct
-                    metric_snap["lbl_str"]   = _pct.apply(_pct_str)
                     cbar_title = "% vs Last Year"
                 else:
                     metric_snap["color_val"] = _diff
-                    metric_snap["lbl_str"]   = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
                     cbar_title = f"Chg vs LY ({_tbl_unit(map_metric)})"
+                if lbl_display == "% Change":
+                    metric_snap["lbl_str"] = _pct.apply(_pct_str)
+                else:
+                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["prior_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
@@ -1232,12 +1266,14 @@ with tab_state:
                 _pct  = _diff / metric_snap["state_avg"] * 100
                 if chg_display == "% Change":
                     metric_snap["color_val"] = _pct
-                    metric_snap["lbl_str"]   = _pct.apply(_pct_str)
                     cbar_title = "% vs Olympic Avg"
                 else:
                     metric_snap["color_val"] = _diff
-                    metric_snap["lbl_str"]   = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
                     cbar_title = f"Chg vs Olympic Avg ({_tbl_unit(map_metric)})"
+                if lbl_display == "% Change":
+                    metric_snap["lbl_str"] = _pct.apply(_pct_str)
+                else:
+                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["state_avg"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
@@ -1266,12 +1302,14 @@ with tab_state:
                 _pct  = _diff / metric_snap["comp_value"] * 100
                 if chg_display == "% Change":
                     metric_snap["color_val"] = _pct
-                    metric_snap["lbl_str"]   = _pct.apply(_pct_str)
                     cbar_title = f"% vs {comp_year}"
                 else:
                     metric_snap["color_val"] = _diff
-                    metric_snap["lbl_str"]   = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
                     cbar_title = f"Chg vs {comp_year} ({_tbl_unit(map_metric)})"
+                if lbl_display == "% Change":
+                    metric_snap["lbl_str"] = _pct.apply(_pct_str)
+                else:
+                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["comp_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
@@ -1301,12 +1339,14 @@ with tab_state:
                 _pct  = _diff / metric_snap["comp_value"] * 100
                 if chg_display == "% Change":
                     metric_snap["color_val"] = _pct
-                    metric_snap["lbl_str"]   = _pct.apply(_pct_str)
                     cbar_title = f"% vs {_rp_prev_lbl}"
                 else:
                     metric_snap["color_val"] = _diff
-                    metric_snap["lbl_str"]   = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
                     cbar_title = f"Chg vs {_rp_prev_lbl} ({_tbl_unit(map_metric)})"
+                if lbl_display == "% Change":
+                    metric_snap["lbl_str"] = _pct.apply(_pct_str)
+                else:
+                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["comp_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
@@ -1532,7 +1572,7 @@ with tab_state:
                 cur_yr  = tbl_years_list[-1]   # most recent year in window
                 prev_yr = tbl_years_list[-2]   # prior year
 
-                def _build_row(label, yr_map, row_type="state"):
+                def _build_row(label, yr_map, row_type="state", prior_rpt_val=None):
                     row = {"label": label, "row_type": row_type}
                     all_vals = []
                     for yr in tbl_years_list:
@@ -1544,12 +1584,14 @@ with tab_state:
                     olym     = _olympic6(recent6)
                     cur_v    = yr_map.get(cur_yr)
                     prev_v   = yr_map.get(prev_yr)
-                    row["olym"]       = olym
-                    row["min_val"]    = min(all_vals) if all_vals else None
-                    row["max_val"]    = max(all_vals) if all_vals else None
-                    row["pct_us"]     = (olym / nat_olym_val * 100) if (olym and nat_olym_val) else None
-                    row["chg_vs_ly"]  = ((cur_v - prev_v) / prev_v * 100) if (cur_v and prev_v) else None
-                    row["pct_of_avg"] = (cur_v / olym * 100) if (cur_v and olym) else None
+                    row["olym"]             = olym
+                    row["min_val"]          = min(all_vals) if all_vals else None
+                    row["max_val"]          = max(all_vals) if all_vals else None
+                    row["pct_us"]           = (olym / nat_olym_val * 100) if (olym and nat_olym_val) else None
+                    row["chg_vs_ly"]        = ((cur_v - prev_v) / prev_v * 100) if (cur_v and prev_v) else None
+                    row["pct_of_avg"]       = (cur_v / olym * 100) if (cur_v and olym) else None
+                    row["prior_rpt_val"]    = prior_rpt_val
+                    row["chg_vs_prior_rpt"] = (cur_v - prior_rpt_val) if (cur_v is not None and prior_rpt_val is not None) else None
                     return row
 
                 # For yield metrics load harvested acres so subtotals can be
@@ -1570,12 +1612,37 @@ with tab_state:
                                     int(r["year"]): r["value"] for _, r in hdf.iterrows()
                                 }
 
+                # ── Prior Report Comparison for table ────────────────────────
+                _rp_tbl_opts  = [(l, p) for l, p in _get_report_periods(map_metric)
+                                 if p != "YEAR"]
+                _pr_tbl_lbl   = None
+                _pr_state_vals: dict = {}
+                _pr_us_val    = None
+
+                if _rp_tbl_opts:
+                    _pr_col, _ = st.columns([3, 7])
+                    _pr_tbl_lbl = _pr_col.selectbox(
+                        "Prior report to compare:",
+                        [l for l, _ in _rp_tbl_opts],
+                        index=0,
+                        key=f"tbl_prior_{commodity}_{map_metric}",
+                    )
+                    _pr_tbl_nass = dict(_rp_tbl_opts)[_pr_tbl_lbl]
+                    with st.spinner(f"Loading {_pr_tbl_lbl} data..."):
+                        _pr_snap = load_period_snapshot(commodity, map_metric, map_year, _pr_tbl_nass)
+                        _pr_us_val = load_national_period_snapshot(commodity, map_metric, map_year, _pr_tbl_nass)
+                    if not _pr_snap.empty:
+                        _pr_state_vals = dict(zip(_pr_snap["state_abbr"], _pr_snap["value"]))
+
                 # Build all rows
                 tbl_rows = []
                 for g_idx, grp in enumerate(_active_groups):
                     grp_states = grp["states"]
                     for abbr in grp_states:
-                        tbl_rows.append(_build_row(abbr, state_yr_vals.get(abbr, {}), "state"))
+                        tbl_rows.append(_build_row(
+                            abbr, state_yr_vals.get(abbr, {}), "state",
+                            prior_rpt_val=_pr_state_vals.get(abbr),
+                        ))
                     if grp["subtotal"] and len(grp_states) > 1:
                         sub_yr = {}
                         for yr in tbl_years_list:
@@ -1593,13 +1660,19 @@ with tab_state:
                                 vals  = [state_yr_vals.get(a, {}).get(yr) for a in grp_states]
                                 valid = [v for v in vals if v is not None]
                                 sub_yr[yr] = sum(valid) if valid else None
-                        tbl_rows.append(_build_row(grp["subtotal"], sub_yr, "subtotal"))
+                        # Subtotal prior = sum of states in group
+                        sub_pr_vals = [_pr_state_vals.get(a) for a in grp_states
+                                       if _pr_state_vals.get(a) is not None]
+                        sub_pr_val  = sum(sub_pr_vals) if sub_pr_vals else None
+                        tbl_rows.append(_build_row(grp["subtotal"], sub_yr, "subtotal",
+                                                   prior_rpt_val=sub_pr_val))
                     if g_idx < len(_active_groups) - 1:
                         tbl_rows.append({"row_type": "spacer"})
 
                 # US Total row (national data)
                 us_yr_map = {yr: nat_yr_vals.get(yr) for yr in tbl_years_list}
-                tbl_rows.append(_build_row("US Total", us_yr_map, "us"))
+                tbl_rows.append(_build_row("US Total", us_yr_map, "us",
+                                           prior_rpt_val=_pr_us_val))
 
                 # ── Render HTML table ─────────────────────────────────────────
                 _TH  = (f"padding:7px 9px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
@@ -1620,6 +1693,17 @@ with tab_state:
 
                 chg_hdr_lbl = "% vs LY"
                 yr_hdrs    = "".join(f"<th style='{_TH}'>{yr}</th>" for yr in tbl_years_list)
+                # Optional prior report columns
+                _pr_col_count = 2 if _pr_tbl_lbl else 0
+                _pr_hdr_html  = ""
+                if _pr_tbl_lbl:
+                    _THR = (f"padding:7px 9px;text-align:right;background:#1c2b35;color:#93c5fd;"
+                            f"font-weight:700;font-size:11px;white-space:nowrap;"
+                            f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
+                    _pr_hdr_html = (
+                        f"<th style='{_THR}'>{_pr_tbl_lbl} ({map_year})</th>"
+                        f"<th style='{_THR}'>Chg vs {_pr_tbl_lbl}</th>"
+                    )
                 thead_html = (
                     f"<thead><tr>"
                     f"<th style='{_TH0}'>State / Region</th>"
@@ -1630,6 +1714,7 @@ with tab_state:
                     f"<th style='{_THS}'>Min</th>"
                     f"<th style='{_THS}'>Max</th>"
                     f"<th style='{_THP}'>% of U.S.</th>"
+                    f"{_pr_hdr_html}"
                     f"</tr></thead>"
                 )
 
@@ -1638,7 +1723,7 @@ with tab_state:
                 for row in tbl_rows:
                     rtype = row.get("row_type")
                     if rtype == "spacer":
-                        colspan = 1 + len(tbl_years_list) + 6   # +2 for new columns
+                        colspan = 1 + len(tbl_years_list) + 6 + _pr_col_count
                         tbody_html += (
                             f"<tr><td colspan='{colspan}' "
                             f"style='height:9px;background:{DARK_BG};'></td></tr>"
@@ -1730,6 +1815,31 @@ with tab_state:
                     pct_val = row.get("pct_us")
                     pct_str = "—" if pct_val is None else f"{pct_val:.1f}%"
 
+                    # Prior report columns
+                    _pr_cells_html = ""
+                    if _pr_tbl_lbl:
+                        _pr_v   = row.get("prior_rpt_val")
+                        _pr_chg = row.get("chg_vs_prior_rpt")
+                        _pr_val_str = _tbl_num(_pr_v, map_metric) if _pr_v is not None else "—"
+                        if _pr_chg is None:
+                            _pr_chg_str = "—"; _pr_chg_clr = GRAY; _pr_chg_bg = bg
+                        elif _pr_chg >= 0:
+                            _pr_chg_str = f"▲ {_nom_chg_str(_pr_chg, map_metric)}"
+                            _pr_chg_clr = "#4ade80"; _pr_chg_bg = "rgba(34,197,94,0.12)"
+                        else:
+                            _pr_chg_str = f"▼ {_nom_chg_str(abs(_pr_chg), map_metric)}"
+                            _pr_chg_clr = "#f87171"; _pr_chg_bg = "rgba(239,68,68,0.12)"
+                        _td_pr = (f"padding:6px 9px;text-align:right;background:#1c2b35;"
+                                  f"color:#93c5fd;font-weight:600;font-size:12px;"
+                                  f"border-left:2px solid #4a5568;{border_top}")
+                        _td_pr_chg = (f"padding:6px 9px;text-align:right;background:{_pr_chg_bg};"
+                                      f"color:{_pr_chg_clr};font-weight:700;font-size:12px;"
+                                      f"border-left:1px solid #4a5568;{border_top}")
+                        _pr_cells_html = (
+                            f"<td style='{_td_pr}'>{_pr_val_str}</td>"
+                            f"<td style='{_td_pr_chg}'>{_pr_chg_str}</td>"
+                        )
+
                     tbody_html += (
                         f"<tr>"
                         f"<td style='{td_lbl}'>{row['label']}</td>"
@@ -1740,6 +1850,7 @@ with tab_state:
                         f"<td style='{td_sp}'>{_tbl_num(row.get('min_val'), map_metric)}</td>"
                         f"<td style='{td_sp}'>{_tbl_num(row.get('max_val'), map_metric)}</td>"
                         f"<td style='{td_pct}'>{pct_str}</td>"
+                        f"{_pr_cells_html}"
                         f"</tr>"
                     )
 
@@ -1755,6 +1866,7 @@ with tab_state:
                     chg_hdr_lbl,
                     f"{commodity}_{map_metric}_{map_year}".replace(" ", "_").replace("/", ""),
                     f"{commodity} {map_metric} {map_year}",
+                    prior_lbl=_pr_tbl_lbl,
                 )
 
             # ── State historical section ──────────────────────────────────────
