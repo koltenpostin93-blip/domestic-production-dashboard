@@ -569,7 +569,47 @@ PERIOD_PRIORITY = [
     "YEAR - AUG FORECAST",
     "YEAR - JUN ACREAGE",
     "YEAR - JUL FORECAST",
+    "YEAR - MAR ACREAGE",   # Prospective Plantings — lowest priority fallback
 ]
+
+# Ordered (display_label, NASS reference_period_desc) pairs per metric category,
+# used by the "vs Prior Report" map view to populate period selectors.
+REPORT_PERIODS = {
+    "Acres": [
+        ("Mar Intentions", "YEAR - MAR ACREAGE"),
+        ("Jun Acreage",    "YEAR - JUN ACREAGE"),
+        ("Final",          "YEAR"),
+    ],
+    "Yield": [
+        ("May Fcst",  "YEAR - MAY FORECAST"),
+        ("Jun Fcst",  "YEAR - JUN FORECAST"),
+        ("Jul Fcst",  "YEAR - JUL FORECAST"),
+        ("Aug Fcst",  "YEAR - AUG FORECAST"),
+        ("Sep Fcst",  "YEAR - SEP FORECAST"),
+        ("Oct Fcst",  "YEAR - OCT FORECAST"),
+        ("Nov Fcst",  "YEAR - NOV FORECAST"),
+        ("Final",     "YEAR"),
+    ],
+    "Production": [
+        ("May Fcst",  "YEAR - MAY FORECAST"),
+        ("Jun Fcst",  "YEAR - JUN FORECAST"),
+        ("Jul Fcst",  "YEAR - JUL FORECAST"),
+        ("Aug Fcst",  "YEAR - AUG FORECAST"),
+        ("Sep Fcst",  "YEAR - SEP FORECAST"),
+        ("Oct Fcst",  "YEAR - OCT FORECAST"),
+        ("Nov Fcst",  "YEAR - NOV FORECAST"),
+        ("Final",     "YEAR"),
+    ],
+}
+
+def _get_report_periods(metric: str):
+    if "Acres" in metric:
+        return REPORT_PERIODS["Acres"]
+    if "Yield" in metric:
+        return REPORT_PERIODS["Yield"]
+    if "Production" in metric:
+        return REPORT_PERIODS["Production"]
+    return REPORT_PERIODS["Acres"]
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_state_snapshot(commodity: str, year: int) -> pd.DataFrame:
@@ -608,6 +648,24 @@ def load_state_snapshot(commodity: str, year: int) -> pd.DataFrame:
         result = pd.DataFrame(best_rows)
         frames.append(result[["state_name", "state_abbr", "value", "metric"]])
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_period_snapshot(commodity: str, metric: str, year: int, period: str) -> pd.DataFrame:
+    """Fetch state-level values for an explicit NASS reference_period_desc."""
+    if commodity not in COMMODITIES or metric not in COMMODITIES[commodity]:
+        return pd.DataFrame()
+    mp   = COMMODITIES[commodity][metric]
+    base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
+    df   = _fetch({**base, "agg_level_desc": "STATE", "domain_desc": "TOTAL",
+                   "reference_period_desc": period, "year": str(year)})
+    if df.empty:
+        return pd.DataFrame()
+    df = _prefer_all_classes(df)
+    df["value"]      = df["Value"].apply(_clean)
+    df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
+    df = df.dropna(subset=["value", "state_abbr"])
+    df = df[df["value"] > 0]
+    return df[["state_name", "state_abbr", "value"]].copy()
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_state_history(commodity: str, metric: str, y0: int, y1: int) -> pd.DataFrame:
@@ -984,7 +1042,7 @@ with tab_state:
             # ── Map view toggle ───────────────────────────────────────────────
             map_view = st.radio(
                 "Map view",
-                ["Value", "vs Last Year", "vs Olympic Avg", "vs Year"],
+                ["Value", "vs Last Year", "vs Olympic Avg", "vs Year", "vs Prior Report"],
                 horizontal=True,
                 label_visibility="collapsed",
                 key="map_view",
@@ -997,6 +1055,25 @@ with tab_state:
                     [y for y in range(map_year - 1, 1989, -1)],
                     key="map_comp_year",
                 )
+
+            _rp_cur_lbl = _rp_prev_lbl = _rp_cur_nass = _rp_prev_nass = None
+            if map_view == "vs Prior Report":
+                _rp_opts   = _get_report_periods(map_metric)
+                _rp_labels = [p[0] for p in _rp_opts]
+                _rp_nass   = dict(_rp_opts)
+                _rca, _rcb = st.columns(2)
+                _rp_cur_lbl  = _rca.selectbox(
+                    "Current Report", _rp_labels,
+                    index=min(len(_rp_labels) - 1, 1),   # default to Jun Acreage (index 1 for Acres)
+                    key="rp_cur",
+                )
+                _rp_prev_lbl = _rcb.selectbox(
+                    "Prior Report", _rp_labels,
+                    index=0,                              # default to Mar Intentions (index 0)
+                    key="rp_prev",
+                )
+                _rp_cur_nass  = _rp_nass[_rp_cur_lbl]
+                _rp_prev_nass = _rp_nass[_rp_prev_lbl]
             st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
             # ── Always load LY for hover ──────────────────────────────────────
@@ -1092,7 +1169,7 @@ with tab_state:
                 diverging  = True
                 cbar_title = "% vs Olympic Avg"
 
-            else:   # vs Year
+            elif map_view == "vs Year":
                 with st.spinner(f"Loading {comp_year} data..."):
                     comp_snap_raw = load_state_snapshot(commodity, comp_year)
                 comp_metric = (
@@ -1120,6 +1197,36 @@ with tab_state:
                 )
                 diverging  = True
                 cbar_title = f"% vs {comp_year}"
+
+            else:   # vs Prior Report
+                with st.spinner(f"Loading {_rp_cur_lbl} and {_rp_prev_lbl} data..."):
+                    _rp_cur_df  = load_period_snapshot(commodity, map_metric, map_year, _rp_cur_nass)
+                    _rp_prev_df = load_period_snapshot(commodity, map_metric, map_year, _rp_prev_nass)
+                _rp_cur_vals  = dict(zip(_rp_cur_df["state_abbr"],  _rp_cur_df["value"])) \
+                                if not _rp_cur_df.empty else {}
+                _rp_prev_vals = dict(zip(_rp_prev_df["state_abbr"], _rp_prev_df["value"])) \
+                                if not _rp_prev_df.empty else {}
+                metric_snap["value"]      = metric_snap["state_abbr"].map(_rp_cur_vals)
+                metric_snap["comp_value"] = metric_snap["state_abbr"].map(_rp_prev_vals)
+                metric_snap = metric_snap.dropna(subset=["value", "comp_value"])
+                metric_snap["color_val"] = (
+                    (metric_snap["value"] - metric_snap["comp_value"])
+                    / metric_snap["comp_value"] * 100
+                )
+                metric_snap["lbl_str"] = metric_snap["color_val"].apply(_pct_str)
+                metric_snap["hover_a"] = metric_snap["value"].apply(
+                    lambda v: _bar_label(v, map_metric))
+                metric_snap["hover_b"] = metric_snap["comp_value"].apply(
+                    lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
+                hover_tmpl = (
+                    "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
+                    f"vs {_rp_prev_lbl}: <b>%{{z:+.1f}}%</b><br>"
+                    f"{_rp_cur_lbl}: %{{customdata[2]}}<br>"
+                    f"{_rp_prev_lbl}: %{{customdata[3]}}"
+                    "<extra></extra>"
+                )
+                diverging  = True
+                cbar_title = f"% vs {_rp_prev_lbl}"
 
             # Diverging scale: red ← 0 → green, symmetric range
             if diverging:
@@ -1200,7 +1307,7 @@ with tab_state:
                 fig_map,
                 use_container_width=True,
                 on_select="rerun",
-                key=f"map_{commodity}_{map_year}_{map_metric}_{map_view}_{comp_year}",
+                key=f"map_{commodity}_{map_year}_{map_metric}_{map_view}_{comp_year}_{_rp_cur_lbl}_{_rp_prev_lbl}",
                 config={"scrollZoom": False, "displayModeBar": False},
             )
 
