@@ -633,9 +633,15 @@ def _stocks_base(commodity: str, quarter: str) -> dict:
             "domain_desc": "TOTAL", "reference_period_desc": api_period}
 
 def _filter_storage(df: pd.DataFrame, storage: str) -> pd.DataFrame:
-    """Filter a raw NASS stocks DataFrame by storage location via class_desc."""
-    if storage == "TOTAL" or "class_desc" not in df.columns:
+    """Filter a raw NASS stocks DataFrame by storage location via class_desc.
+    NASS returns ALL CLASSES + ON FARM + OFF FARM rows for each state; picking
+    ALL CLASSES for 'Total' avoids double-counting the sub-categories."""
+    if "class_desc" not in df.columns:
         return df
+    if storage == "TOTAL":
+        # Keep only the aggregate row; fall back to all rows if column is absent
+        agg = df[df["class_desc"].str.upper() == "ALL CLASSES"]
+        return agg if not agg.empty else df
     return df[df["class_desc"].str.upper() == storage]
 
 @st.cache_data(ttl=300, show_spinner=False)
