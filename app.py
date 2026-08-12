@@ -782,16 +782,25 @@ def _stocks_base(commodity: str, quarter: str) -> dict:
             "domain_desc": "TOTAL", "reference_period_desc": api_period}
 
 def _filter_storage(df: pd.DataFrame, storage: str) -> pd.DataFrame:
-    """Filter a raw NASS stocks DataFrame by storage location via class_desc.
-    NASS returns ALL CLASSES + ON FARM + OFF FARM rows for each state; picking
-    ALL CLASSES for 'Total' avoids double-counting the sub-categories."""
-    if "class_desc" not in df.columns:
+    """Filter a raw NASS stocks DataFrame to avoid double-counting.
+    NASS returns 3 rows per state/year: the aggregate plus ON FARM and OFF FARM
+    sub-rows. All share class_desc='ALL CLASSES'; the split is via
+    util_practice_desc ('ON FARM'/'OFF FARM' in the value for sub-rows).
+    For TOTAL we keep only the aggregate row using both filters."""
+    if storage != "TOTAL":
+        # ON FARM / OFF FARM explicit selection — filter class_desc
+        if "class_desc" in df.columns:
+            return df[df["class_desc"].str.upper() == storage]
         return df
-    if storage == "TOTAL":
-        # Keep only the aggregate row; fall back to all rows if column is absent
-        agg = df[df["class_desc"].str.upper() == "ALL CLASSES"]
-        return agg if not agg.empty else df
-    return df[df["class_desc"].str.upper() == storage]
+
+    # TOTAL: keep ALL CLASSES rows that are NOT the on-farm or off-farm sub-rows
+    out = df.copy()
+    if "class_desc" in out.columns:
+        out = out[out["class_desc"].str.upper() == "ALL CLASSES"]
+    if "util_practice_desc" in out.columns:
+        _util = out["util_practice_desc"].str.upper()
+        out = out[~(_util.str.contains("ON FARM") | _util.str.contains("OFF FARM"))]
+    return out if not out.empty else df
 
 @st.cache_data(ttl=300, show_spinner=False)
 def load_stocks_snapshot(commodity: str, quarter: str, year: int,
@@ -927,6 +936,11 @@ with st.sidebar:
     st.markdown("---")
     st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>Quarterly Stocks</p>", unsafe_allow_html=True)
     stocks_year = st.selectbox("Stocks Year", list(range(THIS_YEAR, 1999, -1)))
+
+    st.markdown("---")
+    if st.button("🔄 Force Update", use_container_width=True, help="Clear all cached data and reload from USDA NASS"):
+        st.cache_data.clear()
+        st.rerun()
 
 
 # ── Header ───────────────────────────────────────────────────────────────────
