@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import requests
+import base64
+import pathlib
 from datetime import date
 from io import BytesIO
 
@@ -72,8 +74,13 @@ GRAY      = "#9ca3af"   # sidebar secondary text
 
 BLUE      = TEAL        # alias so chart helpers keep working
 
-# Logo URLs
-LOGO_COLOR = "https://www.jpsi.com/wp-content/uploads/2023/04/Group-2.png"
+# ── Logo ─────────────────────────────────────────────────────────────────────
+LOGO_WHITE  = "https://www.jpsi.com/wp-content/themes/gate39media/img/logo-white.png"
+_LOGO_FILE  = pathlib.Path(__file__).parent / "assets" / "jsa_50th_logo.png"
+if _LOGO_FILE.exists():
+    LOGO_COLOR = "data:image/png;base64," + base64.b64encode(_LOGO_FILE.read_bytes()).decode()
+else:
+    LOGO_COLOR = "https://www.jpsi.com/wp-content/uploads/2023/04/Group-2.png"
 
 STATE_ABBREV = {
     "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR",
@@ -1009,8 +1016,8 @@ def _base_layout(fig, title="", height=390):
         xref="paper", yref="paper",
         x=1.0, y=0.0,
         xanchor="right", yanchor="bottom",
-        sizex=0.18, sizey=0.18,
-        opacity=0.10,
+        sizex=0.22, sizey=0.22,
+        opacity=0.12,
         layer="above",
     ))
     return fig
