@@ -3107,58 +3107,155 @@ with tab_revisions:
                     )
 
 # ═════════════════════════════════════════════════════════════════════════════
-# TAB 5 — WASDE (FAS PSD)
+# TAB 5 — WASDE / World S&D  (FAS PSD)
 # ═════════════════════════════════════════════════════════════════════════════
 with tab_wasde:
-    psd_code = PSD_CODE.get(commodity)
-    if psd_code is None:
-        st.info(f"WASDE balance sheet data is not available for **{commodity}** in the FAS PSD database.")
-        st.stop()
+    import calendar as _cal
 
-    # ── Global filter bar ─────────────────────────────────────────────────────
-    _gf_a, _gf_b, _gf_c, _gf_d = st.columns([4, 3, 2, 2])
-    _W_CAT_OPTS = ["Production", "Dom. Consumption", "Exports", "Imports",
-                   "Ending Stocks", "Beginning Stocks", "Total Supply"]
-    wasde_category = _gf_a.radio(
-        "Category", _W_CAT_OPTS, horizontal=True,
-        label_visibility="collapsed", key="w_cat",
-    )
-    wasde_view = _gf_b.radio(
-        "View", ["Current", "Δ LY", "Δ 5-Yr Avg"], horizontal=True,
-        label_visibility="collapsed", key="w_view",
-    )
-    _w_scope = _gf_c.radio(
-        "Scope", ["US", "World"], horizontal=True,
-        label_visibility="collapsed", key="w_scope",
-    )
-    _w_units = _gf_d.radio(
-        "Units", ["Imperial", "Metric"], horizontal=True,
-        label_visibility="collapsed", key="w_units",
-    )
-    st.markdown("<hr style='margin:6px 0 10px;border-color:#4a5568'>", unsafe_allow_html=True)
+    # ══════════════════════════════════════════════════════════════════════════
+    # 1 — Filter Panel
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("⚙️  Filters", expanded=True):
+        _fw1, _fw2, _fw3 = st.columns([2, 2, 4])
 
-    # Map category label → FAS PSD attributeName (exact)
-    _W_CAT_ATTR = {
-        "Production":        "Production",
-        "Dom. Consumption":  "Dom. Consumption",
-        "Exports":           "Exports",
-        "Imports":           "Imports",
-        "Ending Stocks":     "Ending Stocks",
-        "Beginning Stocks":  "Beginning Stocks",
-        "Total Supply":      "Total Supply",
+        _w_year_list = list(range(2000, THIS_YEAR + 1))
+        _w_yr_beg = _fw1.selectbox(
+            "Begin Year", _w_year_list,
+            index=_w_year_list.index(max(2010, THIS_YEAR - 14)),
+            key="w_yr_beg",
+        )
+        _w_yr_end = _fw2.selectbox(
+            "End Year", _w_year_list,
+            index=len(_w_year_list) - 1,
+            key="w_yr_end",
+        )
+        _w_comm_list = [c for c in PSD_CODE]
+        _w_comm = _fw3.selectbox(
+            "Commodity",
+            _w_comm_list,
+            index=_w_comm_list.index(commodity) if commodity in _w_comm_list else 0,
+            key="w_comm_f",
+        )
+        _w_psd_code = PSD_CODE.get(_w_comm, "")
+
+        if not _w_psd_code:
+            st.info(f"WASDE data not available for **{_w_comm}**.")
+            st.stop()
+
+        _fw4, _fw5 = st.columns([3, 2])
+        with st.spinner("Loading country list…"):
+            _w_ctry_map = load_psd_countries()
+        _w_ctry_opts = ["World"] + [
+            f"{name} ({code})" for code, name in _w_ctry_map.items()
+            if code and code not in ("World",)
+        ]
+        _w_ctry_sel = _fw4.multiselect(
+            "Countries / Groupings", _w_ctry_opts,
+            default=["World"],
+            key="w_ctry_f",
+        )
+        _w_remove_sel = _fw5.multiselect(
+            "Countries to Remove",
+            [o for o in _w_ctry_opts if o != "World"],
+            placeholder="e.g. China (removed from World totals)",
+            key="w_remove_f",
+        )
+
+        _fw6, _fw7, _fw8 = st.columns([3, 2, 3])
+        _W_CAT_OPTS = [
+            "Production", "Dom. Consumption", "Exports", "Imports",
+            "Ending Stocks", "Beginning Stocks", "Total Supply",
+        ]
+        _W_CAT_ATTR = {
+            "Production": "Production",
+            "Dom. Consumption": "Dom. Consumption",
+            "Exports": "Exports",
+            "Imports": "Imports",
+            "Ending Stocks": "Ending Stocks",
+            "Beginning Stocks": "Beginning Stocks",
+            "Total Supply": "Total Supply",
+        }
+        _w_cat = _fw6.selectbox("Category", _W_CAT_OPTS, key="w_cat_f")
+        _w_cat_attr = _W_CAT_ATTR[_w_cat]
+        _w_units_choice = _fw7.radio(
+            "Units", ["Metric", "Imperial"], horizontal=True, key="w_units_f",
+        )
+
+        # Compare Report selector for Δ LR
+        _today_d = date.today()
+        _cur_rpt_m, _cur_rpt_y = _today_d.month, _today_d.year
+        if _today_d.day < 13:
+            _cur_rpt_m -= 1
+            if _cur_rpt_m == 0:
+                _cur_rpt_m = 12
+                _cur_rpt_y -= 1
+        _lr_opts: list[tuple[int, int, str]] = []
+        _tmp_m, _tmp_y = _cur_rpt_m, _cur_rpt_y
+        for _ in range(18):
+            _tmp_m -= 1
+            if _tmp_m == 0:
+                _tmp_m = 12
+                _tmp_y -= 1
+            _lr_opts.append((_tmp_y, _tmp_m, f"{_cal.month_abbr[_tmp_m]}-{str(_tmp_y)[-2:]}"))
+        _lr_labels = [f"{lbl} ({_cal.month_name[m]} {y})" for y, m, lbl in _lr_opts]
+        _lr_idx = _fw8.selectbox(
+            "Compare Report (for Δ LR)",
+            range(len(_lr_labels)),
+            format_func=lambda i: _lr_labels[i],
+            key="w_lr_f",
+        )
+        _lr_year, _lr_month, _lr_label = _lr_opts[_lr_idx]
+
+    # ── Shared setup ──────────────────────────────────────────────────────────
+    def _parse_cc(s: str) -> str:
+        return "World" if s == "World" else s.rsplit("(", 1)[-1].rstrip(")")
+
+    def _cc_name(cc: str) -> str:
+        return "World" if cc == "World" else _w_ctry_map.get(cc, cc)
+
+    _w_ctry_codes = [_parse_cc(s) for s in _w_ctry_sel] if _w_ctry_sel else ["World"]
+    _w_remove_codes = [_parse_cc(s) for s in _w_remove_sel] if _w_remove_sel else []
+    _w_view_yrs = list(range(max(2000, _w_yr_beg), _w_yr_end + 1))
+
+    _MMT_TO_MILBU = {
+        "Corn": 39.3683, "Soybeans": 36.7437, "Wheat": 36.7437,
+        "Barley": 39.3683, "Sorghum": 39.3683,
+        "Canola": 44.0924, "Peanuts": 44.0924, "Rice": 44.0924,
+        "Cotton": 1.0,
     }
-    _cat_attr = _W_CAT_ATTR[wasde_category]
+    _conv_f = _MMT_TO_MILBU.get(_w_comm, 1.0)
 
-    wt_rnk, wt_us, wt_world, wt_hist, wt_country, wt_multi = st.tabs([
-        "  🏆  Rankings  ",
-        "  🇺🇸  US Balance Sheet  ",
-        "  🌍  World Balance Sheet  ",
-        "  📅  WASDE History  ",
-        "  🔍  Country Detail  ",
-        "  📈  Multi-Commodity S/U  ",
-    ])
+    def _w_unit_label() -> str:
+        if _w_units_choice == "Imperial":
+            return "Mil. Bu" if _w_comm != "Cotton" else "Mil. Bales"
+        return "MMT"
 
-    # ── Shared HTML table styling ──────────────────────────────────────────────
+    def _w_divisor(df: pd.DataFrame | None = None) -> float:
+        if df is not None and not df.empty:
+            ul, d = _psd_unit_label(df)
+            if "bu" in ul.lower():
+                return d
+        if _w_units_choice == "Imperial":
+            return 1000.0 / _conv_f
+        return 1000.0
+
+    def _load_cc(cc: str, yr: int) -> pd.DataFrame:
+        if cc == "World":
+            return load_psd_world_year(_w_psd_code, yr)
+        return load_psd_country_year(_w_psd_code, cc, yr)
+
+    def _get_val(cc: str, yr: int, attr_key: str) -> float | None:
+        df = _load_cc(cc, yr)
+        v = _psd_attr(df, attr_key)
+        if v is not None and cc == "World" and _w_remove_codes:
+            for rc in _w_remove_codes:
+                if rc == "World":
+                    continue
+                rm_v = _psd_attr(load_psd_country_year(_w_psd_code, rc, yr), attr_key)
+                if rm_v is not None:
+                    v -= rm_v
+        return v
+
     _WTH  = (f"padding:7px 12px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
              f"font-weight:700;font-size:11px;white-space:nowrap;border-bottom:2px solid {TEAL};")
     _WTH0 = (f"padding:7px 12px;text-align:left;background:{TEAL_DIM};color:{WHITE};"
@@ -3168,7 +3265,6 @@ with tab_wasde:
              f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
 
     def _w_row_style(row_type: str, alt: bool) -> tuple[str, str, str]:
-        """Returns (bg, label_color, num_color) for a balance sheet row."""
         if row_type == "total":
             return DARK_ALT, TEAL, WHITE
         if row_type == "stocks":
@@ -3177,7 +3273,6 @@ with tab_wasde:
         return bg, WHITE, GRAY
 
     def _w_chg_cell(cur: float | None, prev: float | None, divisor: float) -> tuple[str, str, str]:
-        """Returns (text, color, bg) for a YoY change cell."""
         if cur is None or prev is None or prev == 0:
             return "—", GRAY, "transparent"
         chg = (cur - prev) / divisor
@@ -3187,81 +3282,56 @@ with tab_wasde:
             return f"+{chg:.1f}", "#4ade80", "rgba(34,197,94,0.12)"
         return f"{chg:.1f}", "#f87171", "rgba(239,68,68,0.12)"
 
-    # ── Rankings ──────────────────────────────────────────────────────────────
-    with wt_rnk:
-        _rg_c1, _rg_c2, _rg_c3 = st.columns([4, 2, 1])
-        _rnk_group = _rg_c1.radio(
-            "Group by",
-            ["Top Producers", "Top Exporters", "Top Users", "Top Importers", "All Countries"],
-            horizontal=True, key="w_rnk_grp",
+    # ══════════════════════════════════════════════════════════════════════════
+    # 2 — Ranking Table
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("🏆  Ranking Table", expanded=True):
+        _rk1, _rk2, _rk3, _rk4 = st.columns([5, 2, 1, 1])
+        _rnk_view = _rk1.radio(
+            "View", ["Current", "Δ LR", "Δ LY", "Δ 5YA"],
+            horizontal=True, key="rnk_view",
+            label_visibility="collapsed",
         )
-        _rnk_topn = _rg_c2.selectbox("Show top", [10, 15, 20, 25, 50], index=1, key="w_rnk_n")
-        _rnk_pct  = _rg_c3.checkbox("% of World", key="w_rnk_pct")
+        _rnk_topn  = _rk2.selectbox("Show", [10, 15, 20, 25, 50], index=1, key="rnk_topn")
+        _rnk_pct   = _rk3.checkbox("% World", key="rnk_pct")
+        _rnk_other = _rk4.checkbox("Other", key="rnk_other")
 
-        # Map group → sort attribute
-        _GRPATTR = {
-            "Top Producers":  "Production",
-            "Top Exporters":  "Exports",
-            "Top Users":      "Dom. Consumption",
-            "Top Importers":  "Imports",
-            "All Countries":  _cat_attr,
-        }
-        _sort_attr = _GRPATTR[_rnk_group]
-
-        _rnk_yrs = list(range(wasde_year - 5, wasde_year + 1))
+        _rnk_yr  = _w_yr_end
+        _rnk_yrs = list(range(_rnk_yr - 5, _rnk_yr + 1))
         with st.spinner("Loading ranking data…"):
-            _rnk_dfs  = {yr: load_psd_all_countries_year(psd_code, yr) for yr in _rnk_yrs}
-            _ctry_map_r = load_psd_countries()
+            _rnk_all_dfs = {yr: load_psd_all_countries_year(_w_psd_code, yr) for yr in _rnk_yrs}
 
-        _cur_cat   = _get_ctry_attr(_rnk_dfs.get(wasde_year, pd.DataFrame()), _cat_attr)
-        _cur_sort  = _get_ctry_attr(_rnk_dfs.get(wasde_year, pd.DataFrame()), _sort_attr)
-        _ly_cat    = _get_ctry_attr(_rnk_dfs.get(wasde_year - 1, pd.DataFrame()), _cat_attr)
-        _world_tot = _cur_cat.get("World", 0)
+        _cur_cats  = _get_ctry_attr(_rnk_all_dfs.get(_rnk_yr, pd.DataFrame()), _w_cat_attr)
+        _ly_cats   = _get_ctry_attr(_rnk_all_dfs.get(_rnk_yr - 1, pd.DataFrame()), _w_cat_attr)
+        _world_tot = _cur_cats.get("World") or 0
 
-        # 5-yr average per country for the display category
         _avg5: dict = {}
-        for _cc in _cur_cat:
+        for _cc0 in _cur_cats:
             _priors = [
-                _get_ctry_attr(_rnk_dfs.get(yr, pd.DataFrame()), _cat_attr).get(_cc)
+                _get_ctry_attr(_rnk_all_dfs.get(yr, pd.DataFrame()), _w_cat_attr).get(_cc0)
                 for yr in _rnk_yrs[:-1]
             ]
             _valid = [v for v in _priors if v is not None]
-            _avg5[_cc] = sum(_valid) / len(_valid) if _valid else None
+            _avg5[_cc0] = sum(_valid) / len(_valid) if _valid else None
 
-        _rnk_ul, _rnk_div = _psd_unit_label(_rnk_dfs.get(wasde_year, pd.DataFrame()))
-
-        # Build rows, sorted by sort attribute (descending)
         _rnk_rows: list[dict] = []
-        for _cc, _sort_v in _cur_sort.items():
-            if _cc == "World" or not _cc:
+        for _cc0, _v0 in sorted(_cur_cats.items(), key=lambda kv: kv[1] or 0, reverse=True):
+            if not _cc0 or _cc0 == "World" or _cc0 in _w_remove_codes:
                 continue
-            _cur_v = _cur_cat.get(_cc)
-            _ly_v  = _ly_cat.get(_cc)
-            _a5_v  = _avg5.get(_cc)
             _rnk_rows.append({
-                "code": _cc,
-                "name": _ctry_map_r.get(_cc, _cc),
-                "sort": _sort_v or 0,
-                "cur":  _cur_v,
-                "ly":   _ly_v,
-                "avg5": _a5_v,
-                "dly":  (_cur_v - _ly_v) if (_cur_v is not None and _ly_v is not None) else None,
-                "d5ya": (_cur_v - _a5_v) if (_cur_v is not None and _a5_v is not None) else None,
+                "code": _cc0, "name": _w_ctry_map.get(_cc0, _cc0),
+                "cur": _v0, "ly": _ly_cats.get(_cc0), "avg5": _avg5.get(_cc0),
             })
-        _rnk_rows.sort(key=lambda r: r["sort"], reverse=True)
-        _rnk_rows = _rnk_rows[:_rnk_topn]
 
-        if not _rnk_rows:
+        _top_rows = _rnk_rows[:_rnk_topn]
+        _other_val = sum(r["cur"] or 0 for r in _rnk_rows[_rnk_topn:])
+
+        if not _top_rows:
             st.warning("No ranking data returned from FAS PSD — API may be temporarily unavailable.")
         else:
-            st.markdown(
-                f"<p style='color:{GRAY};font-size:12px;font-weight:700;text-transform:uppercase;"
-                f"letter-spacing:.06em;margin:4px 0 8px'>"
-                f"{_rnk_group} — {commodity} {wasde_category} &nbsp;·&nbsp; "
-                f"<span style='color:{TEAL}'>{wasde_year} ({_rnk_ul})</span></p>",
-                unsafe_allow_html=True,
-            )
-
+            _rnk_div = _w_divisor(_rnk_all_dfs.get(_rnk_yr, pd.DataFrame()))
+            _rnk_ul  = _w_unit_label()
+            _show_chg = _rnk_view != "Current"
             _rth0 = (f"padding:7px 10px;text-align:left;background:{TEAL_DIM};color:{WHITE};"
                      f"font-weight:700;font-size:11px;border-bottom:2px solid {TEAL};")
             _rth  = (f"padding:7px 10px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
@@ -3269,488 +3339,675 @@ with tab_wasde:
             _rthd = (f"padding:7px 10px;text-align:right;background:{DARK_ALT};color:{WHITE};"
                      f"font-weight:700;font-size:11px;white-space:nowrap;"
                      f"border-bottom:2px solid {TEAL};border-left:2px solid #4a5568;")
-
-            _rnk_thead = (
+            _rth_pct = (f"padding:7px 10px;text-align:right;background:{TEAL_DIM};color:{TEAL};"
+                        f"font-weight:700;font-size:11px;white-space:nowrap;border-bottom:2px solid {TEAL};")
+            _chg_hdr = {"Δ LR": "Δ LR", "Δ LY": "Δ LY", "Δ 5YA": "Δ 5YA"}.get(_rnk_view, "")
+            _rnk_head = (
                 f"<thead><tr>"
                 f"<th style='{_rth0}'>#</th>"
                 f"<th style='{_rth0}'>Country</th>"
-                f"<th style='{_rth}'>{wasde_year} ({_rnk_ul})</th>"
-                + (f"<th style='{_rth}'>% World</th>" if (_rnk_pct and _world_tot) else "")
-                + f"<th style='{_rthd}'>Δ LY</th>"
-                f"<th style='{_rthd}'>Δ 5YA</th>"
-                f"</tr></thead>"
+                f"<th style='{_rth}'>{_rnk_yr} ({_rnk_ul})</th>"
+                + (f"<th style='{_rth_pct}'>% World</th>" if _rnk_pct and _world_tot else "")
+                + (f"<th style='{_rthd}'>{_chg_hdr}</th>" if _show_chg else "")
+                + "</tr></thead>"
             )
-
-            _rnk_tbody = ""
-            for _ri, _rrow in enumerate(_rnk_rows, 1):
+            _rnk_body = ""
+            for _ri, _rrow in enumerate(_top_rows, 1):
                 _bg = DARK_CARD if _ri % 2 == 1 else DARK_ALT
-                _cur_disp = f"{_rrow['cur'] / _rnk_div:,.0f}" if _rrow["cur"] is not None else "—"
-                _dly_txt, _dly_clr, _dly_bg = _w_chg_cell(_rrow["cur"], _rrow["ly"], _rnk_div)
-                _d5_txt,  _d5_clr,  _d5_bg  = _w_chg_cell(_rrow["cur"], _rrow["avg5"], _rnk_div)
-                _pct_str = (f"{_rrow['cur'] / _world_tot * 100:.1f}%"
-                            if (_rnk_pct and _world_tot and _rrow["cur"]) else "")
-                _rnk_tbody += (
+                _cur_disp = f"{_rrow['cur'] / _rnk_div:,.1f}" if _rrow["cur"] is not None else "—"
+                _pct_s = (f"{_rrow['cur'] / _world_tot * 100:.1f}%"
+                          if (_rnk_pct and _world_tot and _rrow["cur"]) else "")
+                if _rnk_view == "Δ LY":
+                    _ct, _cc_c, _cb = _w_chg_cell(_rrow["cur"], _rrow["ly"], _rnk_div)
+                elif _rnk_view == "Δ 5YA":
+                    _ct, _cc_c, _cb = _w_chg_cell(_rrow["cur"], _rrow["avg5"], _rnk_div)
+                else:
+                    _ct, _cc_c, _cb = "—", GRAY, "transparent"
+                _rnk_body += (
                     f"<tr>"
                     f"<td style='padding:6px 10px;background:{_bg};color:{GRAY};font-size:12px'>{_ri}</td>"
                     f"<td style='padding:6px 10px;background:{_bg};color:{WHITE};font-weight:600;font-size:12px'>{_rrow['name']}</td>"
                     f"<td style='padding:6px 10px;text-align:right;background:{_bg};color:{AMBER};font-weight:700;font-size:12px'>{_cur_disp}</td>"
-                    + (f"<td style='padding:6px 10px;text-align:right;background:{_bg};color:{GRAY};font-size:12px'>{_pct_str}</td>" if (_rnk_pct and _world_tot) else "")
-                    + f"<td style='padding:6px 10px;text-align:right;background:{_dly_bg};color:{_dly_clr};font-weight:700;font-size:12px;border-left:1px solid #4a5568'>{_dly_txt}</td>"
-                    f"<td style='padding:6px 10px;text-align:right;background:{_d5_bg};color:{_d5_clr};font-weight:700;font-size:12px'>{_d5_txt}</td>"
-                    f"</tr>"
+                    + (f"<td style='padding:6px 10px;text-align:right;background:{_bg};color:{GRAY};font-size:12px'>{_pct_s}</td>" if _rnk_pct and _world_tot else "")
+                    + (f"<td style='padding:6px 10px;text-align:right;background:{_cb};color:{_cc_c};font-weight:700;font-size:12px;border-left:1px solid #4a5568'>{_ct}</td>" if _show_chg else "")
+                    + "</tr>"
                 )
-
+            if _rnk_other and _other_val:
+                _rnk_body += (
+                    f"<tr>"
+                    f"<td style='padding:6px 10px;background:{DARK_ALT};color:{GRAY};font-size:12px'>…</td>"
+                    f"<td style='padding:6px 10px;background:{DARK_ALT};color:{GRAY};font-weight:600;font-size:12px'>"
+                    f"Other ({len(_rnk_rows) - _rnk_topn} countries)</td>"
+                    f"<td style='padding:6px 10px;text-align:right;background:{DARK_ALT};color:{GRAY};font-weight:700;font-size:12px'>"
+                    f"{_other_val / _rnk_div:,.1f}</td>"
+                    + (f"<td></td>" if _rnk_pct and _world_tot else "")
+                    + (f"<td></td>" if _show_chg else "")
+                    + "</tr>"
+                )
             st.markdown(
                 f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;margin-bottom:16px'>"
                 f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif'>"
-                f"{_rnk_thead}<tbody>{_rnk_tbody}</tbody></table></div>",
+                f"{_rnk_head}<tbody>{_rnk_body}</tbody></table></div>",
                 unsafe_allow_html=True,
             )
+            if _rnk_view == "Δ LR":
+                st.caption("⚠️ Country-level Δ LR requires monthly WASDE snapshots. See S&D Table for US Δ LR detail.")
 
-            # Horizontal bar chart
-            _bar_x = [r["cur"] / _rnk_div if r["cur"] else 0 for r in _rnk_rows]
-            _bar_y = [r["name"] for r in _rnk_rows]
-            _bar_clrs = [TEAL if i < 3 else TEAL_DIM for i in range(len(_rnk_rows))]
+            _bx = [r["cur"] / _rnk_div if r["cur"] else 0 for r in _top_rows]
+            _by = [r["name"] for r in _top_rows]
             fig_rnk = go.Figure(go.Bar(
-                x=_bar_x, y=_bar_y, orientation="h",
-                marker_color=_bar_clrs,
-                text=[f"{v:,.0f}" for v in _bar_x],
+                x=_bx, y=_by, orientation="h",
+                marker_color=[TEAL if i < 3 else TEAL_DIM for i in range(len(_top_rows))],
+                text=[f"{v:,.1f}" for v in _bx],
                 textposition="outside",
                 textfont=dict(color=WHITE, size=9),
             ))
             _base_layout(fig_rnk,
-                         title=f"{_rnk_group} — {commodity} {wasde_category} ({wasde_year}, {_rnk_ul})",
-                         height=max(340, len(_rnk_rows) * 26))
-            fig_rnk.update_xaxes(tickformat=",.0f", title=_rnk_ul)
+                         title=f"{_w_comm} {_w_cat} — Top {_rnk_topn} ({_rnk_yr}, {_rnk_ul})",
+                         height=max(340, len(_top_rows) * 26))
+            fig_rnk.update_xaxes(tickformat=",.1f", title=_rnk_ul)
             fig_rnk.update_yaxes(autorange="reversed")
             fig_rnk.update_layout(showlegend=False)
             st.plotly_chart(fig_rnk, use_container_width=True)
 
-    # ── US Balance Sheet ──────────────────────────────────────────────────────
-    with wt_us:
-        _yrs = [wasde_year - 2, wasde_year - 1, wasde_year]
-        with st.spinner("Loading US WASDE data…"):
-            _us_dfs = {yr: load_psd_country_year(psd_code, "US", yr) for yr in _yrs}
+    # ══════════════════════════════════════════════════════════════════════════
+    # 3 — Supply & Demand Table
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("📊  Supply & Demand Table", expanded=True):
+        _sd_c1, _sd_c2, _sd_c3 = st.columns([5, 2, 3])
+        _sd_view = _sd_c1.radio(
+            "View", ["Current", "Δ LR", "Δ LY", "Δ 5YA"],
+            horizontal=True, key="sd_view",
+            label_visibility="collapsed",
+        )
+        _sd_units = _sd_c2.radio("Units", ["Imperial", "Metric"], horizontal=True, key="sd_units_r")
 
-        # Load 5-yr prior years if needed for Δ 5-Yr Avg
-        if wasde_view == "Δ 5-Yr Avg":
-            with st.spinner("Loading 5-year history for averages…"):
-                _us_hist5 = {yr: load_psd_country_year(psd_code, "US", yr)
-                             for yr in range(wasde_year - 5, wasde_year)}
+        _sd_ctry_disp = [_cc_name(cc) for cc in _w_ctry_codes] or ["World"]
+        _sd_ctry_sel = _sd_c3.selectbox("Country", _sd_ctry_disp, key="sd_ctry")
+        _sd_cc = _w_ctry_codes[_sd_ctry_disp.index(_sd_ctry_sel)] if _sd_ctry_sel in _sd_ctry_disp else "World"
 
-        _non_empty = [df for df in _us_dfs.values() if not df.empty]
-        if not _non_empty:
-            st.warning("No US WASDE data returned from FAS PSD. The API may be temporarily unavailable.")
+        _sd_yrs = (_w_view_yrs[-5:] if len(_w_view_yrs) > 5 else _w_view_yrs) or [_w_yr_end]
+
+        with st.spinner(f"Loading S&D data for {_sd_ctry_sel}…"):
+            _sd_dfs = {yr: _load_cc(_sd_cc, yr) for yr in _sd_yrs}
+            if _sd_view == "Δ 5YA":
+                _sd_hist5 = {yr: _load_cc(_sd_cc, yr) for yr in range(_w_yr_end - 5, _w_yr_end)}
+            _sd_lr_data: dict = {}
+            if _sd_view == "Δ LR":
+                _sd_lr_data = load_wasde_excel_month(_w_comm, _w_yr_end, _lr_year, _lr_month)
+
+        _sd_ne = [df for df in _sd_dfs.values() if not df.empty]
+        if not _sd_ne:
+            st.warning(f"No data for {_sd_ctry_sel} — FAS PSD may be temporarily unavailable.")
         else:
-            _unit_lbl, _divisor = _psd_unit_label(_non_empty[0])
+            _raw_ul, _raw_div = _psd_unit_label(_sd_ne[0])
+            _is_bu = "bu" in _raw_ul.lower()
+            if _sd_units == "Imperial":
+                _sd_div = _raw_div if _is_bu else (1000.0 / _conv_f)
+                _sd_ul  = "Mil. Bu" if not _is_bu else _raw_ul
+            else:
+                _sd_div = _raw_div if _is_bu else 1000.0
+                _sd_ul  = _raw_ul if not _is_bu else "MMT"
 
-            # Pre-compute 5-yr averages per attribute for Δ 5-Yr Avg view
-            _us5_avg: dict = {}
-            if wasde_view == "Δ 5-Yr Avg":
+            _sd5_avg: dict = {}
+            if _sd_view == "Δ 5YA":
                 for _ak, _, _ in PSD_BS_ROWS:
-                    _prior_v = [_psd_attr(_us_hist5.get(yr, pd.DataFrame()), _ak)
-                                for yr in range(wasde_year - 5, wasde_year)]
-                    _vv = [v for v in _prior_v if v is not None]
-                    _us5_avg[_ak] = sum(_vv) / len(_vv) if _vv else None
+                    _vs = [_psd_attr(_sd_hist5.get(yr, pd.DataFrame()), _ak)
+                           for yr in range(_w_yr_end - 5, _w_yr_end)]
+                    _vv = [v for v in _vs if v is not None]
+                    _sd5_avg[_ak] = sum(_vv) / len(_vv) if _vv else None
 
-            def _us_ref(attr_key: str) -> float | None:
-                if wasde_view == "Δ LY":
-                    return _psd_attr(_us_dfs[wasde_year - 1], attr_key)
-                if wasde_view == "Δ 5-Yr Avg":
-                    return _us5_avg.get(attr_key)
+            def _sd_ref(ak: str) -> float | None:
+                if _sd_view == "Δ LY":
+                    return _psd_attr(_sd_dfs.get(_w_yr_end - 1, pd.DataFrame()), ak)
+                if _sd_view == "Δ 5YA":
+                    return _sd5_avg.get(ak)
+                if _sd_view == "Δ LR":
+                    return _sd_lr_data.get(ak) if _sd_lr_data else None
                 return None
 
-            _view_chg_lbl = {"Current": "—", "Δ LY": "Δ LY", "Δ 5-Yr Avg": "Δ 5YA"}[wasde_view]
+            _sd_chg_hdr = {"Δ LR": f"Δ LR ({_lr_label})", "Δ LY": "Δ LY", "Δ 5YA": "Δ 5YA"}.get(_sd_view, "")
+            _show_sd_chg = _sd_view != "Current"
+            _sd_ncols = len(_sd_yrs) + (1 if _show_sd_chg else 0)
 
             st.markdown(
                 f"<p style='color:{GRAY};font-size:12px;font-weight:700;text-transform:uppercase;"
-                f"letter-spacing:.06em;margin:16px 0 6px'>"
-                f"US Balance Sheet — {commodity} &nbsp;·&nbsp; "
-                f"<span style='color:{TEAL}'>{_unit_lbl}</span></p>",
+                f"letter-spacing:.06em;margin:8px 0 6px'>"
+                f"{_sd_ctry_sel} — {_w_comm} Balance Sheet &nbsp;·&nbsp; "
+                f"<span style='color:{TEAL}'>{_sd_ul}</span></p>",
                 unsafe_allow_html=True,
             )
 
-            yr_hdrs = "".join(f"<th style='{_WTH}'>{yr}</th>" for yr in _yrs)
-            _ncols = len(_yrs) + (1 if wasde_view != "Current" else 0)
-            _bs_thead = (
-                f"<thead><tr>"
-                f"<th style='{_WTH0}'>Item</th>{yr_hdrs}"
-                + (f"<th style='{_WTHD}'>{_view_chg_lbl}</th>" if wasde_view != "Current" else "")
-                + f"</tr></thead>"
+            _sd_yr_hdrs = "".join(f"<th style='{_WTH}'>{yr}</th>" for yr in _sd_yrs)
+            _sd_head = (
+                f"<thead><tr><th style='{_WTH0}'>Item</th>{_sd_yr_hdrs}"
+                + (f"<th style='{_WTHD}'>{_sd_chg_hdr}</th>" if _show_sd_chg else "")
+                + "</tr></thead>"
             )
-
-            _bs_tbody = ""
-            alt_idx = 0
+            _sd_body = ""
+            _sd_alt = 0
             for attr_key, disp_lbl, row_type in PSD_BS_ROWS:
-                vals = {yr: _psd_attr(_us_dfs[yr], attr_key) for yr in _yrs}
+                vals = {yr: _psd_attr(_sd_dfs.get(yr, pd.DataFrame()), attr_key) for yr in _sd_yrs}
                 if all(v is None for v in vals.values()):
                     continue
-                bg, lbl_c, num_c = _w_row_style(row_type, alt_idx % 2 == 1)
+                bg, lbl_c, num_c = _w_row_style(row_type, _sd_alt % 2 == 1)
                 if row_type not in ("total", "stocks"):
-                    alt_idx += 1
+                    _sd_alt += 1
                 fw = "700" if row_type in ("total", "stocks") else "400"
                 _td0 = (f"padding:6px 12px;text-align:left;background:{bg};color:{lbl_c};"
                         f"font-weight:{fw};font-size:12px;")
                 _tdn = (f"padding:6px 12px;text-align:right;background:{bg};color:{num_c};"
                         f"font-weight:{fw};font-size:12px;")
                 yr_cells = "".join(
-                    f"<td style='{_tdn}'>{_psd_fmt(vals[yr], _divisor)}</td>" for yr in _yrs)
+                    f"<td style='{_tdn}'>{_psd_fmt(vals[yr], _sd_div)}</td>" for yr in _sd_yrs)
                 if attr_key == "Ending Stocks":
-                    _bs_tbody += (
-                        f"<tr><td colspan='{_ncols + 1}' style='height:2px;background:{TEAL_DIM}'></td></tr>")
-                _bs_tbody += f"<tr><td style='{_td0}'>{disp_lbl}</td>{yr_cells}"
-                if wasde_view != "Current":
-                    chg_txt, chg_clr, chg_bg = _w_chg_cell(vals[wasde_year], _us_ref(attr_key), _divisor)
-                    _tdc = (f"padding:6px 12px;text-align:right;background:{chg_bg};"
-                            f"color:{chg_clr};font-weight:700;font-size:12px;"
-                            f"border-left:2px solid #4a5568;")
-                    _bs_tbody += f"<td style='{_tdc}'>{chg_txt}</td>"
-                _bs_tbody += "</tr>"
+                    _sd_body += f"<tr><td colspan='{_sd_ncols + 1}' style='height:2px;background:{TEAL_DIM}'></td></tr>"
+                _sd_body += f"<tr><td style='{_td0}'>{disp_lbl}</td>{yr_cells}"
+                if _show_sd_chg:
+                    _ref = _sd_ref(attr_key)
+                    _ct2, _cc2, _cb2 = _w_chg_cell(vals.get(_w_yr_end), _ref, _sd_div)
+                    _tdc = (f"padding:6px 12px;text-align:right;background:{_cb2};"
+                            f"color:{_cc2};font-weight:700;font-size:12px;border-left:2px solid #4a5568;")
+                    _sd_body += f"<td style='{_tdc}'>{_ct2}</td>"
+                _sd_body += "</tr>"
 
-            # S/U ratio row
-            _su_rows = []
-            for yr in _yrs:
-                es = _psd_attr(_us_dfs[yr], "Ending Stocks")
-                tc = _psd_attr(_us_dfs[yr], "Dom. Consumption")
-                ex = _psd_attr(_us_dfs[yr], "Exports")
-                tu = (tc or 0) + (ex or 0) if tc is not None or ex is not None else None
-                _su_rows.append(es / tu * 100 if (es is not None and tu and tu > 0) else None)
-            _su_ref_val = None
-            if wasde_view == "Δ LY":
-                _es_ref = _psd_attr(_us_dfs[wasde_year - 1], "Ending Stocks")
-                _tc_ref = _psd_attr(_us_dfs[wasde_year - 1], "Dom. Consumption")
-                _ex_ref = _psd_attr(_us_dfs[wasde_year - 1], "Exports")
-                _tu_ref = (_tc_ref or 0) + (_ex_ref or 0)
-                _su_ref_val = _es_ref / _tu_ref * 100 if (_es_ref and _tu_ref) else None
-            elif wasde_view == "Δ 5-Yr Avg":
-                _su_priors = []
-                for _yr5 in range(wasde_year - 5, wasde_year):
-                    _df5 = _us_hist5.get(_yr5, pd.DataFrame())
-                    _es5 = _psd_attr(_df5, "Ending Stocks")
-                    _tc5 = _psd_attr(_df5, "Dom. Consumption")
-                    _ex5 = _psd_attr(_df5, "Exports")
-                    _tu5 = (_tc5 or 0) + (_ex5 or 0)
-                    if _es5 and _tu5:
-                        _su_priors.append(_es5 / _tu5 * 100)
-                _su_ref_val = sum(_su_priors) / len(_su_priors) if _su_priors else None
+            # S/U row
+            _su_row = []
+            for yr in _sd_yrs:
+                _es = _psd_attr(_sd_dfs.get(yr, pd.DataFrame()), "Ending Stocks")
+                _tc = _psd_attr(_sd_dfs.get(yr, pd.DataFrame()), "Dom. Consumption")
+                _ex = _psd_attr(_sd_dfs.get(yr, pd.DataFrame()), "Exports")
+                _tu = (_tc or 0) + (_ex or 0)
+                _su_row.append(_es / _tu * 100 if (_es is not None and _tu > 0) else None)
+            _su_ref_v = None
+            if _sd_view == "Δ LY":
+                _es2 = _psd_attr(_sd_dfs.get(_w_yr_end - 1, pd.DataFrame()), "Ending Stocks")
+                _tc2 = _psd_attr(_sd_dfs.get(_w_yr_end - 1, pd.DataFrame()), "Dom. Consumption")
+                _ex2 = _psd_attr(_sd_dfs.get(_w_yr_end - 1, pd.DataFrame()), "Exports")
+                _tu2 = (_tc2 or 0) + (_ex2 or 0)
+                _su_ref_v = _es2 / _tu2 * 100 if (_es2 and _tu2) else None
+            elif _sd_view == "Δ 5YA":
+                _su_ps = []
+                for yr5 in range(_w_yr_end - 5, _w_yr_end):
+                    _df5 = _sd_hist5.get(yr5, pd.DataFrame())
+                    _e5 = _psd_attr(_df5, "Ending Stocks")
+                    _t5 = _psd_attr(_df5, "Dom. Consumption")
+                    _x5 = _psd_attr(_df5, "Exports")
+                    _u5 = (_t5 or 0) + (_x5 or 0)
+                    if _e5 and _u5:
+                        _su_ps.append(_e5 / _u5 * 100)
+                _su_ref_v = sum(_su_ps) / len(_su_ps) if _su_ps else None
+            elif _sd_view == "Δ LR" and _sd_lr_data:
+                _es_lr = _sd_lr_data.get("Ending Stocks")
+                _tc_lr = _sd_lr_data.get("Dom. Consumption")
+                _ex_lr = _sd_lr_data.get("Exports")
+                _tu_lr = (_tc_lr or 0) + (_ex_lr or 0)
+                _su_ref_v = _es_lr / _tu_lr * 100 if (_es_lr and _tu_lr) else None
 
             _su_bg = "#1c2b35"
-            _bs_tbody += (
-                f"<tr><td colspan='{_ncols + 1}' style='height:2px;background:{TEAL_DIM}'></td></tr>"
-                f"<tr>"
-                f"<td style='padding:6px 12px;text-align:left;background:{_su_bg};color:{AMBER};"
-                f"font-weight:700;font-size:12px;'>Stocks / Use Ratio</td>"
+            _sd_body += (
+                f"<tr><td colspan='{_sd_ncols + 1}' style='height:2px;background:{TEAL_DIM}'></td></tr>"
+                f"<tr><td style='padding:6px 12px;text-align:left;background:{_su_bg};"
+                f"color:{AMBER};font-weight:700;font-size:12px;'>Stocks / Use Ratio</td>"
             )
-            for _sv in _su_rows:
-                _bs_tbody += (
+            for _sv in _su_row:
+                _sd_body += (
                     f"<td style='padding:6px 12px;text-align:right;background:{_su_bg};"
                     f"color:{AMBER};font-weight:700;font-size:12px;'>"
                     f"{'—' if _sv is None else f'{_sv:.1f}%'}</td>"
                 )
-            if wasde_view != "Current":
-                _su_chg = (_su_rows[-1] - _su_ref_val) if (_su_rows[-1] is not None and _su_ref_val is not None) else None
-                _su_chg_str = f"{_su_chg:+.1f} pp" if _su_chg is not None else "—"
-                _su_cc = "#4ade80" if (_su_chg or 0) < 0 else ("#f87171" if (_su_chg or 0) > 0 else GRAY)
-                _bs_tbody += (
+            if _show_sd_chg:
+                _su_cur2 = _su_row[-1] if _su_row else None
+                _su_chg2 = (_su_cur2 - _su_ref_v) if (_su_cur2 is not None and _su_ref_v is not None) else None
+                _su_cc3 = "#4ade80" if (_su_chg2 or 0) < 0 else ("#f87171" if (_su_chg2 or 0) > 0 else GRAY)
+                _sd_body += (
                     f"<td style='padding:6px 12px;text-align:right;background:rgba(245,158,11,0.08);"
-                    f"color:{_su_cc};font-weight:700;font-size:12px;"
-                    f"border-left:2px solid #4a5568;'>{_su_chg_str}</td>"
+                    f"color:{_su_cc3};font-weight:700;font-size:12px;border-left:2px solid #4a5568;'>"
+                    f"{'—' if _su_chg2 is None else f'{_su_chg2:+.1f} pp'}</td>"
                 )
-            _bs_tbody += "</tr>"
+            _sd_body += "</tr>"
 
-            st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;"
-                f"margin-bottom:18px'>"
-                f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif'>"
-                f"{_bs_thead}<tbody>{_bs_tbody}</tbody></table></div>",
-                unsafe_allow_html=True,
-            )
-
-            # Supply vs Use charts (10-year history)
-            _chart_yrs = list(range(wasde_year - 9, wasde_year + 1))
-            with st.spinner("Loading 10-year US history…"):
-                _us_hist = {yr: load_psd_country_year(psd_code, "US", yr) for yr in _chart_yrs}
-
-            prod_vals = [_psd_attr(_us_hist[yr], "Production") for yr in _chart_yrs]
-            dom_vals  = [_psd_attr(_us_hist[yr], "Dom. Consumption") for yr in _chart_yrs]
-            exp_vals  = [_psd_attr(_us_hist[yr], "Exports") for yr in _chart_yrs]
-            es_vals   = [_psd_attr(_us_hist[yr], "Ending Stocks") for yr in _chart_yrs]
-            su_hist   = []
-            for i, yr in enumerate(_chart_yrs):
-                tc = dom_vals[i]; ex = exp_vals[i]; es = es_vals[i]
-                tu = (tc or 0) + (ex or 0)
-                su_hist.append(es / tu * 100 if (es is not None and tu > 0) else None)
-
-            def _safe(lst): return [v / _divisor if v is not None else None for v in lst]
-
-            col_l, col_r = st.columns(2, gap="medium")
-            fig_su = go.Figure()
-            fig_su.add_trace(go.Bar(name="Production", x=_chart_yrs, y=_safe(prod_vals),
-                                    marker_color=TEAL, opacity=0.85))
-            fig_su.add_trace(go.Bar(name="Dom. Consumption", x=_chart_yrs, y=_safe(dom_vals),
-                                    marker_color="#e06c75", opacity=0.85))
-            fig_su.add_trace(go.Bar(name="Exports", x=_chart_yrs, y=_safe(exp_vals),
-                                    marker_color=AMBER, opacity=0.75))
-            fig_su.add_trace(go.Scatter(name="Ending Stocks", x=_chart_yrs, y=_safe(es_vals),
-                                        mode="lines+markers", yaxis="y2",
-                                        line=dict(color=WHITE, width=2, dash="dot"), marker=dict(size=5)))
-            _base_layout(fig_su, title=f"US {commodity} — Supply vs Use ({_unit_lbl})", height=380)
-            fig_su.update_layout(barmode="group",
-                                 yaxis=dict(title=_unit_lbl, tickformat=",.0f"),
-                                 yaxis2=dict(title=f"End. Stocks ({_unit_lbl})", overlaying="y",
-                                             side="right", showgrid=False, tickformat=",.0f"),
-                                 legend=dict(orientation="h", y=-0.18, x=0))
-            col_l.plotly_chart(fig_su, use_container_width=True)
-
-            su_colors = ["#4ade80" if (v or 99) < 15 else AMBER if (v or 99) < 20 else "#f87171"
-                         for v in su_hist]
-            fig_ratio = go.Figure(go.Bar(x=_chart_yrs, y=su_hist, marker_color=su_colors,
-                                         text=[f"{v:.1f}%" if v is not None else "" for v in su_hist],
-                                         textposition="outside", textfont=dict(color=WHITE, size=9)))
-            _base_layout(fig_ratio, title=f"US {commodity} — Stocks / Use Ratio (%)", height=380)
-            fig_ratio.update_yaxes(ticksuffix="%", tickformat=".1f")
-            fig_ratio.update_layout(showlegend=False)
-            col_r.plotly_chart(fig_ratio, use_container_width=True)
-
-    # ── World Balance Sheet ───────────────────────────────────────────────────
-    with wt_world:
-        _w_yrs = [wasde_year - 2, wasde_year - 1, wasde_year]
-        with st.spinner("Loading world WASDE data…"):
-            _wld_dfs = {yr: load_psd_world_year(psd_code, yr) for yr in _w_yrs}
-            _all_countries_df = load_psd_all_countries_year(psd_code, wasde_year)
-        if wasde_view == "Δ 5-Yr Avg":
-            with st.spinner("Loading 5-year world history…"):
-                _wld_hist5 = {yr: load_psd_world_year(psd_code, yr)
-                              for yr in range(wasde_year - 5, wasde_year)}
-
-        _w_non_empty = [df for df in _wld_dfs.values() if not df.empty]
-        if not _w_non_empty:
-            st.warning("No world WASDE data returned from FAS PSD.")
-        else:
-            _wu_lbl, _wd = _psd_unit_label(_w_non_empty[0])
-
-            _wld5_avg: dict = {}
-            if wasde_view == "Δ 5-Yr Avg":
-                for _ak, _, _ in PSD_BS_ROWS:
-                    _wv = [_psd_attr(_wld_hist5.get(yr, pd.DataFrame()), _ak)
-                           for yr in range(wasde_year - 5, wasde_year)]
-                    _wvv = [v for v in _wv if v is not None]
-                    _wld5_avg[_ak] = sum(_wvv) / len(_wvv) if _wvv else None
-
-            def _wld_ref(attr_key: str):
-                if wasde_view == "Δ LY":
-                    return _psd_attr(_wld_dfs[wasde_year - 1], attr_key)
-                if wasde_view == "Δ 5-Yr Avg":
-                    return _wld5_avg.get(attr_key)
-                return None
-
-            _wview_lbl = {"Current": "—", "Δ LY": "Δ LY", "Δ 5-Yr Avg": "Δ 5YA"}[wasde_view]
-
-            st.markdown(
-                f"<p style='color:{GRAY};font-size:12px;font-weight:700;text-transform:uppercase;"
-                f"letter-spacing:.06em;margin:16px 0 6px'>"
-                f"World Balance Sheet — {commodity} &nbsp;·&nbsp; "
-                f"<span style='color:{TEAL}'>{_wu_lbl}</span></p>",
-                unsafe_allow_html=True,
-            )
-
-            _w_ncols = len(_w_yrs) + (1 if wasde_view != "Current" else 0)
-            yr_hdrs_w = "".join(f"<th style='{_WTH}'>{yr}</th>" for yr in _w_yrs)
-            _wbs_thead = (
-                f"<thead><tr><th style='{_WTH0}'>Item</th>{yr_hdrs_w}"
-                + (f"<th style='{_WTHD}'>{_wview_lbl}</th>" if wasde_view != "Current" else "")
-                + f"</tr></thead>"
-            )
-            _wbs_tbody = ""
-            alt_idx_w = 0
-            for attr_key, disp_lbl, row_type in PSD_BS_ROWS:
-                vals = {yr: _psd_attr(_wld_dfs[yr], attr_key) for yr in _w_yrs}
-                if all(v is None for v in vals.values()):
-                    continue
-                bg, lbl_c, num_c = _w_row_style(row_type, alt_idx_w % 2 == 1)
-                if row_type not in ("total", "stocks"):
-                    alt_idx_w += 1
-                fw = "700" if row_type in ("total", "stocks") else "400"
-                _td0 = (f"padding:6px 12px;text-align:left;background:{bg};color:{lbl_c};"
-                        f"font-weight:{fw};font-size:12px;")
-                _tdn = (f"padding:6px 12px;text-align:right;background:{bg};color:{num_c};"
-                        f"font-weight:{fw};font-size:12px;")
-                yr_cells = "".join(f"<td style='{_tdn}'>{_psd_fmt(vals[yr], _wd)}</td>" for yr in _w_yrs)
-                if attr_key == "Ending Stocks":
-                    _wbs_tbody += f"<tr><td colspan='{_w_ncols + 1}' style='height:2px;background:{TEAL_DIM}'></td></tr>"
-                _wbs_tbody += f"<tr><td style='{_td0}'>{disp_lbl}</td>{yr_cells}"
-                if wasde_view != "Current":
-                    chg_txt, chg_clr, chg_bg = _w_chg_cell(vals[wasde_year], _wld_ref(attr_key), _wd)
-                    _tdc = (f"padding:6px 12px;text-align:right;background:{chg_bg};"
-                            f"color:{chg_clr};font-weight:700;font-size:12px;border-left:2px solid #4a5568;")
-                    _wbs_tbody += f"<td style='{_tdc}'>{chg_txt}</td>"
-                _wbs_tbody += "</tr>"
-
-            # World S/U row
-            _wsu = []
-            for yr in _w_yrs:
-                es = _psd_attr(_wld_dfs[yr], "Ending Stocks")
-                tc = _psd_attr(_wld_dfs[yr], "Dom. Consumption")
-                ex = _psd_attr(_wld_dfs[yr], "Exports")
-                tu = (tc or 0) + (ex or 0)
-                _wsu.append(es / tu * 100 if (es is not None and tu > 0) else None)
-            _wbs_tbody += (
-                f"<tr><td colspan='{_w_ncols + 1}' style='height:2px;background:{TEAL_DIM}'></td></tr>"
-                f"<tr><td style='padding:6px 12px;text-align:left;background:#1c2b35;"
-                f"color:{AMBER};font-weight:700;font-size:12px;'>Stocks / Use Ratio</td>"
-            )
-            for sv in _wsu:
-                _wbs_tbody += (
-                    f"<td style='padding:6px 12px;text-align:right;background:#1c2b35;"
-                    f"color:{AMBER};font-weight:700;font-size:12px;'>"
-                    f"{'—' if sv is None else f'{sv:.1f}%'}</td>"
-                )
-            if wasde_view != "Current":
-                wsu_chg = (_wsu[-1] - _wsu[-2]) if (_wsu[-1] is not None and _wsu[-2] is not None) else None
-                wsu_cc = "#4ade80" if (wsu_chg or 0) < 0 else ("#f87171" if (wsu_chg or 0) > 0 else GRAY)
-                _wbs_tbody += (
-                    f"<td style='padding:6px 12px;text-align:right;background:rgba(245,158,11,0.08);"
-                    f"color:{wsu_cc};font-weight:700;font-size:12px;border-left:2px solid #4a5568;'>"
-                    f"{'—' if wsu_chg is None else f'{wsu_chg:+.1f} pp'}</td>"
-                )
-            _wbs_tbody += "</tr>"
             st.markdown(
                 f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;margin-bottom:18px'>"
                 f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif'>"
-                f"{_wbs_thead}<tbody>{_wbs_tbody}</tbody></table></div>",
+                f"{_sd_head}<tbody>{_sd_body}</tbody></table></div>",
                 unsafe_allow_html=True,
             )
+            if _sd_view == "Δ LR":
+                if _sd_lr_data:
+                    st.caption(f"✅ Δ LR sourced from the {_lr_label} USDA WASDE Excel file.")
+                else:
+                    st.caption(f"⚠️ {_lr_label} WASDE Excel not available — try a different Compare Report month.")
 
-            # Top producers / exporters by selected category
-            if not _all_countries_df.empty and "countryCode" in _all_countries_df.columns:
-                with st.spinner("Loading country data…"):
-                    _ctry_map = load_psd_countries()
-                _all_countries_df["countryName"] = _all_countries_df["countryCode"].map(
-                    _ctry_map).fillna(_all_countries_df["countryCode"])
-                col_prod, col_exp = st.columns(2, gap="medium")
+            # Supply vs Use chart
+            _chart_yrs2 = _w_view_yrs[-10:] if len(_w_view_yrs) >= 10 else _w_view_yrs
+            with st.spinner("Loading history chart…"):
+                _sd_hist_ch = {yr: _load_cc(_sd_cc, yr) for yr in _chart_yrs2}
+            _prod_v = [_psd_attr(_sd_hist_ch.get(yr, pd.DataFrame()), "Production") for yr in _chart_yrs2]
+            _dom_v  = [_psd_attr(_sd_hist_ch.get(yr, pd.DataFrame()), "Dom. Consumption") for yr in _chart_yrs2]
+            _exp_v  = [_psd_attr(_sd_hist_ch.get(yr, pd.DataFrame()), "Exports") for yr in _chart_yrs2]
+            _es_v   = [_psd_attr(_sd_hist_ch.get(yr, pd.DataFrame()), "Ending Stocks") for yr in _chart_yrs2]
+            _su_hist2 = []
+            for _i2 in range(len(_chart_yrs2)):
+                _tc2b = _dom_v[_i2]; _ex2b = _exp_v[_i2]; _es2b = _es_v[_i2]
+                _tu2b = (_tc2b or 0) + (_ex2b or 0)
+                _su_hist2.append(_es2b / _tu2b * 100 if (_es2b is not None and _tu2b > 0) else None)
 
-                def _top_bar(attr_key: str, title: str, color: str, col):
-                    df_attr = _all_countries_df[
-                        _all_countries_df["attributeName"].str.lower() == attr_key.lower()
-                    ].copy()
-                    if df_attr.empty:
-                        df_attr = _all_countries_df[
-                            _all_countries_df["attributeName"].str.contains(attr_key, case=False, na=False)
-                        ].copy()
-                    df_attr = df_attr[df_attr["countryCode"] != "World"]
-                    df_attr["disp"] = df_attr["value"] / _wd
-                    df_attr = df_attr.sort_values("disp", ascending=False).head(12)
-                    if df_attr.empty:
-                        col.info(f"No data for {attr_key}")
-                        return
-                    fig = go.Figure(go.Bar(
-                        x=df_attr["disp"], y=df_attr["countryName"],
-                        orientation="h", marker_color=color,
-                        text=df_attr["disp"].apply(lambda v: f"{v:,.0f}"),
-                        textposition="outside", textfont=dict(color=WHITE, size=9),
-                    ))
-                    _base_layout(fig, title=title, height=420)
-                    fig.update_xaxes(tickformat=",.0f", title=_wu_lbl)
-                    fig.update_yaxes(autorange="reversed")
-                    fig.update_layout(showlegend=False)
-                    col.plotly_chart(fig, use_container_width=True)
+            def _safe2(lst): return [v / _sd_div if v is not None else None for v in lst]
 
-                _top_bar("Production",  f"Top 12 Producers — {commodity} ({wasde_year}, {_wu_lbl})", TEAL, col_prod)
-                _top_bar("Exports",     f"Top 12 Exporters — {commodity} ({wasde_year}, {_wu_lbl})", AMBER, col_exp)
+            _col_l, _col_r = st.columns(2, gap="medium")
+            fig_su2 = go.Figure()
+            fig_su2.add_trace(go.Bar(name="Production", x=_chart_yrs2, y=_safe2(_prod_v),
+                                     marker_color=TEAL, opacity=0.85))
+            fig_su2.add_trace(go.Bar(name="Dom. Consumption", x=_chart_yrs2, y=_safe2(_dom_v),
+                                     marker_color="#e06c75", opacity=0.85))
+            fig_su2.add_trace(go.Bar(name="Exports", x=_chart_yrs2, y=_safe2(_exp_v),
+                                     marker_color=AMBER, opacity=0.75))
+            fig_su2.add_trace(go.Scatter(name="End. Stocks", x=_chart_yrs2, y=_safe2(_es_v),
+                                         mode="lines+markers", yaxis="y2",
+                                         line=dict(color=WHITE, width=2, dash="dot"),
+                                         marker=dict(size=5)))
+            _base_layout(fig_su2, title=f"{_sd_ctry_sel} {_w_comm} — Supply vs Use ({_sd_ul})", height=380)
+            fig_su2.update_layout(
+                barmode="group",
+                yaxis=dict(title=_sd_ul, tickformat=",.1f"),
+                yaxis2=dict(title=f"End. Stocks ({_sd_ul})", overlaying="y",
+                            side="right", showgrid=False),
+                legend=dict(orientation="h", y=-0.18, x=0),
+            )
+            _col_l.plotly_chart(fig_su2, use_container_width=True)
 
-    # ── WASDE History ─────────────────────────────────────────────────────────
-    with wt_hist:
-        _hist_mkt_yr = wasde_year
+            _su_clrs2 = ["#4ade80" if (v or 99) < 15 else AMBER if (v or 99) < 20 else "#f87171"
+                         for v in _su_hist2]
+            fig_ratio2 = go.Figure(go.Bar(
+                x=_chart_yrs2, y=_su_hist2, marker_color=_su_clrs2,
+                text=[f"{v:.1f}%" if v is not None else "" for v in _su_hist2],
+                textposition="outside", textfont=dict(color=WHITE, size=9),
+            ))
+            _base_layout(fig_ratio2, title=f"{_sd_ctry_sel} {_w_comm} — S/U Ratio (%)", height=380)
+            fig_ratio2.update_yaxes(ticksuffix="%", tickformat=".1f")
+            fig_ratio2.update_layout(showlegend=False)
+            _col_r.plotly_chart(fig_ratio2, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 4 — Time Series Chart
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("📈  Time Series Chart", expanded=True):
+        _ts1, _ts2, _ts3, _ts4 = st.columns([4, 2, 1, 2])
+        _ts_view = _ts1.radio(
+            "View", ["Current", "Δ LR", "Δ LY", "Δ 5YA"],
+            horizontal=True, key="ts_view", label_visibility="collapsed",
+        )
+        _ts_type   = _ts2.radio("Chart", ["Line", "Bar"], horizontal=True, key="ts_type")
+        _ts_labels = _ts3.checkbox("Labels", key="ts_labels")
+        _ts_seg    = _ts4.checkbox("Segment Countries", key="ts_seg")
+
+        _ts_yrs = _w_view_yrs
+        _ts_div = _w_divisor()
+        _ts_ul  = _w_unit_label()
+
+        with st.spinner("Loading time series…"):
+            _ts_raw: dict = {}
+            for _cc_ts in _w_ctry_codes:
+                _ts_raw[_cc_ts] = {yr: _get_val(_cc_ts, yr, _w_cat_attr) for yr in _ts_yrs}
+
+        if _ts_view in ("Δ LY", "Δ 5YA"):
+            _ts_ref: dict = {}
+            for _cc_ts in _w_ctry_codes:
+                _ts_ref[_cc_ts] = {}
+                for yr in _ts_yrs:
+                    if _ts_view == "Δ LY":
+                        _ts_ref[_cc_ts][yr] = _ts_raw[_cc_ts].get(yr - 1)
+                    else:
+                        _ps = [_ts_raw[_cc_ts].get(y) for y in range(yr - 5, yr)]
+                        _pv = [v for v in _ps if v is not None]
+                        _ts_ref[_cc_ts][yr] = sum(_pv) / len(_pv) if _pv else None
+
+        fig_ts = go.Figure()
+        _ts_colors = [TEAL, AMBER, "#e06c75", "#61afef", "#c678dd", "#56b6c2", WHITE]
+        for _ci, _cc_ts in enumerate(_w_ctry_codes):
+            _clr = _ts_colors[_ci % len(_ts_colors)]
+            _lbl = _cc_name(_cc_ts)
+            if _w_remove_codes and _cc_ts == "World":
+                _lbl += " (excl. " + ", ".join(_cc_name(rc) for rc in _w_remove_codes) + ")"
+            if _ts_view == "Current":
+                _ys = [(_ts_raw[_cc_ts].get(yr) / _ts_div)
+                       if _ts_raw[_cc_ts].get(yr) is not None else None for yr in _ts_yrs]
+            elif _ts_view in ("Δ LY", "Δ 5YA"):
+                _ys = []
+                for yr in _ts_yrs:
+                    _cur2 = _ts_raw[_cc_ts].get(yr)
+                    _ref2 = _ts_ref[_cc_ts].get(yr)
+                    _ys.append((_cur2 - _ref2) / _ts_div
+                               if (_cur2 is not None and _ref2 is not None) else None)
+            else:
+                _ys = [(_ts_raw[_cc_ts].get(yr) / _ts_div)
+                       if _ts_raw[_cc_ts].get(yr) is not None else None for yr in _ts_yrs]
+
+            if _ts_type == "Bar":
+                fig_ts.add_trace(go.Bar(
+                    x=_ts_yrs, y=_ys, name=_lbl, marker_color=_clr,
+                    text=[f"{v:.1f}" for v in _ys if v is not None] if _ts_labels else None,
+                    textposition="outside" if _ts_labels else None,
+                    textfont=dict(color=WHITE, size=9) if _ts_labels else None,
+                ))
+            else:
+                fig_ts.add_trace(go.Scatter(
+                    x=_ts_yrs, y=_ys, name=_lbl, mode="lines+markers",
+                    line=dict(color=_clr, width=2), marker=dict(size=5),
+                    text=[f"{v:.1f}" if v is not None else "" for v in _ys] if _ts_labels else None,
+                    textposition="top center" if _ts_labels else None,
+                    textfont=dict(color=WHITE, size=9) if _ts_labels else None,
+                ))
+
+        _ts_sfx = {
+            "Current": "", "Δ LR": f" (Δ vs {_lr_label})",
+            "Δ LY": " (Δ vs Prior Year)", "Δ 5YA": " (Δ vs 5-Yr Avg)",
+        }.get(_ts_view, "")
+        _base_layout(fig_ts, title=f"{_w_comm} {_w_cat}{_ts_sfx} ({_ts_ul})", height=440)
+        if _ts_type == "Bar":
+            fig_ts.update_layout(barmode="group" if len(_w_ctry_codes) > 1 else "relative")
+        fig_ts.update_yaxes(tickformat=",.1f", title=_ts_ul, zeroline=True, zerolinecolor=GRAY)
+        fig_ts.update_layout(legend=dict(orientation="h", y=-0.15, x=0), hovermode="x unified")
+        if _ts_view == "Δ LR":
+            st.caption("⚠️ Δ LR time series uses current FAS PSD data — historical monthly snapshots not available for trend view.")
+        st.plotly_chart(fig_ts, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 5 — World Map
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("🗺️  World Map", expanded=False):
+        _mp1, _mp2 = st.columns([4, 2])
+        _mp_view = _mp1.radio(
+            "View", ["Current", "Δ LY", "Δ 5YA"],
+            horizontal=True, key="mp_view", label_visibility="collapsed",
+        )
+
+        with st.spinner("Loading map data…"):
+            _mp_df = load_psd_all_countries_year(_w_psd_code, _w_yr_end)
+            _mp_ly_df = (load_psd_all_countries_year(_w_psd_code, _w_yr_end - 1)
+                         if _mp_view == "Δ LY" else pd.DataFrame())
+            _mp_hist = ({yr: load_psd_all_countries_year(_w_psd_code, yr)
+                         for yr in range(_w_yr_end - 5, _w_yr_end)}
+                        if _mp_view == "Δ 5YA" else {})
+
+        if _mp_df.empty:
+            st.warning("No world data for map — FAS PSD API may be temporarily unavailable.")
+        else:
+            _mp_div  = _w_divisor(_mp_df)
+            _mp_ul   = _w_unit_label()
+            _mp_cur  = _get_ctry_attr(_mp_df, _w_cat_attr)
+
+            if _mp_view == "Δ LY":
+                _mp_ly   = _get_ctry_attr(_mp_ly_df, _w_cat_attr)
+                _mp_plot = {cc: (v - _mp_ly[cc]) / _mp_div
+                            for cc, v in _mp_cur.items()
+                            if cc != "World" and v is not None and _mp_ly.get(cc) is not None}
+                _mp_title = f"{_w_comm} {_w_cat} Δ LY ({_w_yr_end}, {_mp_ul})"
+            elif _mp_view == "Δ 5YA":
+                _mp_ref_d = {}
+                for cc in _mp_cur:
+                    _ps = [_get_ctry_attr(_mp_hist.get(yr, pd.DataFrame()), _w_cat_attr).get(cc)
+                           for yr in range(_w_yr_end - 5, _w_yr_end)]
+                    _pv = [v for v in _ps if v is not None]
+                    _mp_ref_d[cc] = sum(_pv) / len(_pv) if _pv else None
+                _mp_plot = {cc: (v - _mp_ref_d[cc]) / _mp_div
+                            for cc, v in _mp_cur.items()
+                            if cc != "World" and v is not None and _mp_ref_d.get(cc) is not None}
+                _mp_title = f"{_w_comm} {_w_cat} Δ 5YA ({_w_yr_end}, {_mp_ul})"
+            else:
+                _mp_plot = {cc: v / _mp_div for cc, v in _mp_cur.items()
+                            if cc != "World" and v is not None}
+                _mp_title = f"{_w_comm} {_w_cat} by Country ({_w_yr_end}, {_mp_ul})"
+
+            for _rc in _w_remove_codes:
+                _mp_plot.pop(_rc, None)
+
+            _PSD_ISO3 = {
+                "US": "USA", "BR": "BRA", "AR": "ARG", "CN": "CHN", "IN": "IND",
+                "UA": "UKR", "RU": "RUS", "CA": "CAN", "AU": "AUS",
+                "FR": "FRA", "DE": "DEU", "PL": "POL", "RO": "ROU",
+                "MX": "MEX", "PH": "PHL", "EG": "EGY", "NG": "NGA",
+                "ET": "ETH", "VN": "VNM", "TH": "THA", "ID": "IDN",
+                "JP": "JPN", "KR": "KOR", "TR": "TUR", "PK": "PAK",
+                "BD": "BGD", "ZA": "ZAF", "DZ": "DZA", "IQ": "IRQ",
+                "IR": "IRN", "MY": "MYS", "KZ": "KAZ", "MZ": "MOZ",
+                "TZ": "TZA", "SD": "SDN", "MA": "MAR", "PE": "PER",
+                "CO": "COL", "CL": "CHL", "VE": "VEN", "BO": "BOL",
+                "PY": "PRY", "UY": "URY", "GB": "GBR", "ES": "ESP",
+                "IT": "ITA", "PT": "PRT", "HU": "HUN", "RS": "SRB",
+                "GH": "GHA", "CI": "CIV", "KE": "KEN", "UG": "UGA",
+                "ZM": "ZMB", "MW": "MWI", "ZW": "ZWE", "AO": "AGO",
+                "CM": "CMR", "BA": "BIH", "SO": "SOM",
+            }
+            _mp_iso3, _mp_z, _mp_names = [], [], []
+            for cc, v in _mp_plot.items():
+                iso = _PSD_ISO3.get(cc)
+                if iso:
+                    _mp_iso3.append(iso)
+                    _mp_z.append(v)
+                    _mp_names.append(_w_ctry_map.get(cc, cc))
+
+            if _mp_iso3:
+                fig_map = go.Figure(go.Choropleth(
+                    locations=_mp_iso3, z=_mp_z, text=_mp_names,
+                    colorscale="RdYlGn" if _mp_view != "Current" else "Teal",
+                    reversescale=(_mp_view == "Current"),
+                    colorbar=dict(title=_mp_ul, thickness=14, len=0.6),
+                    marker_line_color="#4a5568", marker_line_width=0.5,
+                ))
+                fig_map.update_layout(
+                    title=dict(text=_mp_title, font=dict(color=WHITE, size=14)),
+                    paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG,
+                    geo=dict(
+                        bgcolor=DARK_BG, showframe=False,
+                        showcoastlines=True, coastlinecolor="#4a5568",
+                        showland=True, landcolor="#2d3748",
+                        showocean=True, oceancolor=DARK_BG,
+                        showlakes=False, projection_type="natural earth",
+                    ),
+                    margin=dict(l=0, r=0, t=40, b=0), height=480,
+                )
+                st.plotly_chart(fig_map, use_container_width=True)
+            else:
+                st.info("No country-level data available for this commodity/category.")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 6 — Pie Chart
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("🥧  Pie Chart", expanded=False):
+        _pie1, _pie2 = st.columns([3, 2])
+        _pie_view = _pie1.radio(
+            "View", ["Current", "Δ LY", "Δ 5YA"],
+            horizontal=True, key="pie_view", label_visibility="collapsed",
+        )
+        _pie_topn = _pie2.selectbox("Show top", [10, 15, 20], key="pie_topn")
+
+        with st.spinner("Loading pie data…"):
+            _pie_df = load_psd_all_countries_year(_w_psd_code, _w_yr_end)
+            _pie_ly = (load_psd_all_countries_year(_w_psd_code, _w_yr_end - 1)
+                       if _pie_view == "Δ LY" else pd.DataFrame())
+
+        if not _pie_df.empty:
+            _pie_div  = _w_divisor(_pie_df)
+            _pie_ul   = _w_unit_label()
+            _pie_raw  = _get_ctry_attr(_pie_df, _w_cat_attr)
+            if _pie_view == "Δ LY" and not _pie_ly.empty:
+                _pie_ly_r = _get_ctry_attr(_pie_ly, _w_cat_attr)
+                _pie_disp = {cc: abs(v - _pie_ly_r.get(cc, v)) / _pie_div
+                             for cc, v in _pie_raw.items()
+                             if cc != "World" and v is not None and _pie_ly_r.get(cc) is not None}
+                _pie_title = f"{_w_comm} {_w_cat} — YoY Change Share ({_w_yr_end})"
+            else:
+                _pie_disp = {cc: v / _pie_div for cc, v in _pie_raw.items()
+                             if cc != "World" and v is not None and v > 0}
+                _pie_title = f"{_w_comm} {_w_cat} — Country Shares ({_w_yr_end}, {_pie_ul})"
+            for _rc in _w_remove_codes:
+                _pie_disp.pop(_rc, None)
+            _pie_sorted = sorted(_pie_disp.items(), key=lambda kv: kv[1], reverse=True)
+            _pie_top    = _pie_sorted[:_pie_topn]
+            _pie_other  = sum(v for _, v in _pie_sorted[_pie_topn:])
+            _pie_labels = [_w_ctry_map.get(cc, cc) for cc, _ in _pie_top]
+            _pie_vals   = [v for _, v in _pie_top]
+            if _pie_other > 0:
+                _pie_labels.append("Other")
+                _pie_vals.append(_pie_other)
+            _PCLRS = [TEAL, AMBER, "#e06c75", "#61afef", "#c678dd",
+                      "#56b6c2", "#98c379", "#d19a66", "#7f848e",
+                      "#528bff", "#be5046", "#21c7a8", GRAY]
+            fig_pie = go.Figure(go.Pie(
+                labels=_pie_labels, values=_pie_vals,
+                marker=dict(colors=_PCLRS[:len(_pie_labels)],
+                            line=dict(color=DARK_BG, width=1)),
+                textfont=dict(color=WHITE, size=11), hole=0.3,
+            ))
+            fig_pie.update_layout(
+                title=dict(text=_pie_title, font=dict(color=WHITE, size=14)),
+                paper_bgcolor=DARK_BG, plot_bgcolor=DARK_BG,
+                legend=dict(font=dict(color=WHITE, size=11), bgcolor="rgba(0,0,0,0)"),
+                margin=dict(t=60, b=20), height=480,
+            )
+            st.plotly_chart(fig_pie, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 7 — Bar Chart
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("📊  Bar Chart", expanded=False):
+        _bar2c1, _bar2c2 = st.columns([4, 2])
+        _bar2_view = _bar2c1.radio(
+            "View", ["Current", "Δ LY", "Δ 5YA"],
+            horizontal=True, key="bar2_view", label_visibility="collapsed",
+        )
+        _bar2_topn = _bar2c2.selectbox("Show top", [10, 15, 20, 25], index=1, key="bar2_topn")
+
+        with st.spinner("Loading bar data…"):
+            _bar2_df = load_psd_all_countries_year(_w_psd_code, _w_yr_end)
+            _bar2_ly = (load_psd_all_countries_year(_w_psd_code, _w_yr_end - 1)
+                        if _bar2_view == "Δ LY" else pd.DataFrame())
+            _bar2_hist = ({yr: load_psd_all_countries_year(_w_psd_code, yr)
+                           for yr in range(_w_yr_end - 5, _w_yr_end)}
+                          if _bar2_view == "Δ 5YA" else {})
+
+        if not _bar2_df.empty:
+            _bar2_div  = _w_divisor(_bar2_df)
+            _bar2_ul   = _w_unit_label()
+            _bar2_cur  = _get_ctry_attr(_bar2_df, _w_cat_attr)
+            if _bar2_view == "Δ LY":
+                _bar2_ly_r = _get_ctry_attr(_bar2_ly, _w_cat_attr)
+                _bar2_vals = {cc: (v - _bar2_ly_r[cc]) / _bar2_div
+                              for cc, v in _bar2_cur.items()
+                              if cc != "World" and v is not None and _bar2_ly_r.get(cc) is not None}
+                _bar2_title = f"{_w_comm} {_w_cat} YoY Change — Top {_bar2_topn} ({_w_yr_end})"
+            elif _bar2_view == "Δ 5YA":
+                _bar2_ref = {}
+                for cc in _bar2_cur:
+                    _ps = [_get_ctry_attr(_bar2_hist.get(yr, pd.DataFrame()), _w_cat_attr).get(cc)
+                           for yr in range(_w_yr_end - 5, _w_yr_end)]
+                    _pv = [v for v in _ps if v is not None]
+                    _bar2_ref[cc] = sum(_pv) / len(_pv) if _pv else None
+                _bar2_vals = {cc: (v - _bar2_ref[cc]) / _bar2_div
+                              for cc, v in _bar2_cur.items()
+                              if cc != "World" and v is not None and _bar2_ref.get(cc) is not None}
+                _bar2_title = f"{_w_comm} {_w_cat} Δ 5YA — Top {_bar2_topn} ({_w_yr_end})"
+            else:
+                _bar2_vals = {cc: v / _bar2_div for cc, v in _bar2_cur.items()
+                              if cc != "World" and v is not None}
+                _bar2_title = f"{_w_comm} {_w_cat} — Top {_bar2_topn} Countries ({_w_yr_end}, {_bar2_ul})"
+            for _rc in _w_remove_codes:
+                _bar2_vals.pop(_rc, None)
+            _bar2_srt  = sorted(_bar2_vals.items(), key=lambda kv: abs(kv[1]), reverse=True)[:_bar2_topn]
+            _bar2_nms  = [_w_ctry_map.get(cc, cc) for cc, _ in _bar2_srt]
+            _bar2_ys   = [v for _, v in _bar2_srt]
+            _bar2_clrs = (
+                ["#4ade80" if v >= 0 else "#f87171" for v in _bar2_ys]
+                if _bar2_view != "Current"
+                else [TEAL if i < 3 else TEAL_DIM for i in range(len(_bar2_ys))]
+            )
+            fig_bar2 = go.Figure(go.Bar(
+                x=_bar2_ys, y=_bar2_nms, orientation="h",
+                marker_color=_bar2_clrs,
+                text=[f"{v:+,.1f}" if _bar2_view != "Current" else f"{v:,.1f}" for v in _bar2_ys],
+                textposition="outside", textfont=dict(color=WHITE, size=9),
+            ))
+            _base_layout(fig_bar2, title=_bar2_title, height=max(340, len(_bar2_ys) * 26))
+            fig_bar2.update_xaxes(tickformat=",.1f", title=_bar2_ul)
+            fig_bar2.update_yaxes(autorange="reversed")
+            fig_bar2.update_layout(showlegend=False)
+            st.plotly_chart(fig_bar2, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # 8 — WASDE Revision History
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("📅  WASDE Revision History", expanded=False):
+        _hist_mkt_yr = _w_yr_end
         st.markdown(
             f"<p style='color:{GRAY};font-size:12px;font-weight:700;text-transform:uppercase;"
             f"letter-spacing:.06em;margin:4px 0 10px'>"
-            f"Monthly WASDE Revision History — {commodity} "
+            f"Monthly WASDE Revision History — {_w_comm} "
             f"<span style='color:{TEAL}'>{_hist_mkt_yr}/{str(_hist_mkt_yr+1)[-2:]}</span></p>",
             unsafe_allow_html=True,
         )
-
-        # -- NASS monthly crop production data (Area Harvested, Yield, Production)
-        # NASS uses the marketing year start year for all monthly forecasts (year = mkt_year)
-        _hist_comm_metric_keys = _HIST_METRIC_MAP.get(commodity, {})
+        _hist_comm_metric_keys = _HIST_METRIC_MAP.get(_w_comm, {})
         _hist_nass_metrics = {k: v for k, v in _hist_comm_metric_keys.items() if v is not None}
 
-        # Build column definitions: (display_label, nass_period_desc, nass_year)
         _hist_cols: list[tuple[str, str, int]] = []
-        _yr1_suffix = str(_hist_mkt_yr)[-2:]
-        _yr2_suffix = str(_hist_mkt_yr + 1)[-2:]
+        _yr1_s = str(_hist_mkt_yr)[-2:]
+        _yr2_s = str(_hist_mkt_yr + 1)[-2:]
         for _disp, _period, _yr_off in _WASDE_HIST_PERIODS:
-            _suffix = _yr1_suffix if _yr_off == 0 else _yr2_suffix
-            _col_lbl = f"{_disp}-{_suffix}"
-            _hist_cols.append((_col_lbl, _period, _hist_mkt_yr + _yr_off))
+            _sfx = _yr1_s if _yr_off == 0 else _yr2_s
+            _hist_cols.append((f"{_disp}-{_sfx}", _period, _hist_mkt_yr + _yr_off))
 
-        # Load NASS data per period per metric (uses COMMODITIES keys like "Harvested Acres")
         with st.spinner("Loading NASS monthly forecast data…"):
             _nass_data: dict[str, dict[str, float | None]] = {m: {} for m in _hist_nass_metrics}
             for _col_lbl, _period, _nass_yr in _hist_cols:
                 for _metric_lbl, _comm_key in _hist_nass_metrics.items():
-                    _v = load_national_period_snapshot(commodity, _comm_key, _nass_yr, _period)
-                    _nass_data[_metric_lbl][_col_lbl] = _v
+                    _nass_data[_metric_lbl][_col_lbl] = load_national_period_snapshot(
+                        _w_comm, _comm_key, _nass_yr, _period)
 
-        # Load WASDE Excel data for balance sheet rows (best-effort)
-        # Report months: we try each calendar month for the selected marketing year
-        # First year months: May-Nov of _hist_mkt_yr
-        # Second year months: Jan-Aug of _hist_mkt_yr+1 (current)
         _excel_report_months: list[tuple[str, int, int]] = [
-            (f"May-{_yr1_suffix}",  _hist_mkt_yr,     5),
-            (f"Jun-{_yr1_suffix}",  _hist_mkt_yr,     6),
-            (f"Jul-{_yr1_suffix}",  _hist_mkt_yr,     7),
-            (f"Aug-{_yr1_suffix}",  _hist_mkt_yr,     8),
-            (f"Sep-{_yr1_suffix}",  _hist_mkt_yr,     9),
-            (f"Oct-{_yr1_suffix}",  _hist_mkt_yr,    10),
-            (f"Nov-{_yr1_suffix}",  _hist_mkt_yr,    11),
-            (f"Dec-{_yr1_suffix}",  _hist_mkt_yr,    12),
-            (f"Jan-{_yr2_suffix}",  _hist_mkt_yr + 1, 1),
-            (f"Feb-{_yr2_suffix}",  _hist_mkt_yr + 1, 2),
-            (f"Mar-{_yr2_suffix}",  _hist_mkt_yr + 1, 3),
-            (f"Apr-{_yr2_suffix}",  _hist_mkt_yr + 1, 4),
-            (f"May-{_yr2_suffix}",  _hist_mkt_yr + 1, 5),
-            (f"Jun-{_yr2_suffix}",  _hist_mkt_yr + 1, 6),
-            (f"Jul-{_yr2_suffix}",  _hist_mkt_yr + 1, 7),
-            (f"Aug-{_yr2_suffix}",  _hist_mkt_yr + 1, 8),
+            (f"May-{_yr1_s}",  _hist_mkt_yr,     5),
+            (f"Jun-{_yr1_s}",  _hist_mkt_yr,     6),
+            (f"Jul-{_yr1_s}",  _hist_mkt_yr,     7),
+            (f"Aug-{_yr1_s}",  _hist_mkt_yr,     8),
+            (f"Sep-{_yr1_s}",  _hist_mkt_yr,     9),
+            (f"Oct-{_yr1_s}",  _hist_mkt_yr,    10),
+            (f"Nov-{_yr1_s}",  _hist_mkt_yr,    11),
+            (f"Dec-{_yr1_s}",  _hist_mkt_yr,    12),
+            (f"Jan-{_yr2_s}",  _hist_mkt_yr + 1, 1),
+            (f"Feb-{_yr2_s}",  _hist_mkt_yr + 1, 2),
+            (f"Mar-{_yr2_s}",  _hist_mkt_yr + 1, 3),
+            (f"Apr-{_yr2_s}",  _hist_mkt_yr + 1, 4),
+            (f"May-{_yr2_s}",  _hist_mkt_yr + 1, 5),
+            (f"Jun-{_yr2_s}",  _hist_mkt_yr + 1, 6),
+            (f"Jul-{_yr2_s}",  _hist_mkt_yr + 1, 7),
+            (f"Aug-{_yr2_s}",  _hist_mkt_yr + 1, 8),
         ]
-        # Only include months up to current date
         _today_ym = (date.today().year, date.today().month)
         _excel_report_months = [
-            (lbl, yr, mo) for lbl, yr, mo in _excel_report_months
-            if (yr, mo) <= _today_ym
+            (lbl, yr, mo) for lbl, yr, mo in _excel_report_months if (yr, mo) <= _today_ym
         ]
-
         _excel_data: dict[str, dict[str, float | None]] = {}
         _excel_cols_loaded: list[str] = []
         if _excel_report_months:
             with st.spinner(f"Downloading {len(_excel_report_months)} monthly WASDE files…"):
                 for _col_lbl, _rep_yr, _rep_mo in _excel_report_months:
-                    _ex = load_wasde_excel_month(commodity, _hist_mkt_yr, _rep_yr, _rep_mo)
+                    _ex = load_wasde_excel_month(_w_comm, _hist_mkt_yr, _rep_yr, _rep_mo)
                     if _ex:
                         _excel_data[_col_lbl] = _ex
                         _excel_cols_loaded.append(_col_lbl)
 
-        # Determine which columns to show (union of NASS + Excel)
-        _all_col_labels = sorted(
-            set([c for c, _, _ in _hist_cols]) | set(_excel_cols_loaded),
-            key=lambda x: _excel_report_months.index(
-                next((t for t in _excel_report_months if t[0] == x), _excel_report_months[-1]))
-            if x in [t[0] for t in _excel_report_months] else 999
-        )
-        # Fallback: just use all excel months + nass periods in order
         _all_col_labels_ordered: list[str] = []
         _seen_cols: set = set()
-        for _cl, _yr, _mo in _excel_report_months:
+        for _cl, _yr_ex, _mo_ex in _excel_report_months:
             if _cl not in _seen_cols:
                 _all_col_labels_ordered.append(_cl)
                 _seen_cols.add(_cl)
-        for _cl, _pd, _ny in _hist_cols:
+        for _cl, _pd2, _ny in _hist_cols:
             if _cl not in _seen_cols:
                 _all_col_labels_ordered.append(_cl)
                 _seen_cols.add(_cl)
         _col_labels_display = _all_col_labels_ordered
 
-        # Balance sheet rows to display in the table
         _bs_rows_hist = [
             ("Area Harvested",         "Area Harvested",        "supply"),
             ("Yield",                  "Yield",                 "supply"),
@@ -3767,18 +4024,14 @@ with tab_wasde:
             ("_sep3", "", "divider"),
             ("Ending Stocks",          "Ending Stocks",         "stocks"),
         ]
-
-        # Build HTML table
-        _ht_col_count = len(_col_labels_display) + 1  # +1 for row label
-        _hist_th = (f"padding:6px 8px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
-                    f"font-weight:700;font-size:10px;white-space:nowrap;border-bottom:2px solid {TEAL};")
+        _ht_col_count = len(_col_labels_display) + 1
+        _hist_th  = (f"padding:6px 8px;text-align:right;background:{TEAL_DIM};color:{WHITE};"
+                     f"font-weight:700;font-size:10px;white-space:nowrap;border-bottom:2px solid {TEAL};")
         _hist_th0 = (f"padding:6px 10px;text-align:left;background:{TEAL_DIM};color:{WHITE};"
                      f"font-weight:700;font-size:10px;border-bottom:2px solid {TEAL};min-width:140px;")
-
         _hthead = f"<thead><tr><th style='{_hist_th0}'>Item</th>"
         for _cl in _col_labels_display:
-            _is_excel = _cl in _excel_data
-            _cl_clr = TEAL if _is_excel else WHITE
+            _cl_clr = TEAL if _cl in _excel_data else WHITE
             _hthead += f"<th style='{_hist_th}color:{_cl_clr}'>{_cl}</th>"
         _hthead += "</tr></thead>"
 
@@ -3797,16 +4050,12 @@ with tab_wasde:
             _htdn = (f"padding:5px 8px;text-align:right;background:{_bg};color:{_num_c};"
                      f"font-weight:{_fw};font-size:11px;")
             _htbody += f"<tr><td style='{_htd0}'>{_row_lbl}</td>"
-
             for _cl in _col_labels_display:
                 _val = None
-                # Check NASS data (production, area, yield)
                 if _row_key in _nass_data:
                     _val = _nass_data[_row_key].get(_cl)
-                # Check Excel data
                 if _val is None and _cl in _excel_data:
                     _val = _excel_data[_cl].get(_row_key)
-                # For yield/area: format with 1 decimal; for production: no decimals
                 if _val is None:
                     _cell_str = "—"
                 elif _row_key == "Yield":
@@ -3816,10 +4065,8 @@ with tab_wasde:
                 else:
                     _cell_str = f"{_val:,.0f}"
                 _htbody += f"<td style='{_htdn}'>{_cell_str}</td>"
-
             _htbody += "</tr>"
 
-        # Stocks/Use ratio row (from Excel data or computed from FAS PSD current)
         _htbody += f"<tr><td colspan='{_ht_col_count}' style='height:2px;background:{TEAL_DIM}'></td></tr>"
         _su_lbl_td = (f"padding:5px 10px;text-align:left;background:#1c2b35;"
                       f"color:{AMBER};font-weight:700;font-size:11px;")
@@ -3827,13 +4074,13 @@ with tab_wasde:
                       f"color:{AMBER};font-weight:700;font-size:11px;")
         _htbody += f"<tr><td style='{_su_lbl_td}'>Stocks / Use</td>"
         for _cl in _col_labels_display:
-            _es = (_excel_data.get(_cl) or {}).get("Ending Stocks")
-            _dc = (_excel_data.get(_cl) or {}).get("Dom. Consumption")
-            _ex = (_excel_data.get(_cl) or {}).get("Exports")
-            if _es is not None and (_dc is not None or _ex is not None):
-                _tu = (_dc or 0) + (_ex or 0)
-                _su_v = _es / _tu * 100 if _tu > 0 else None
-                _su_str = f"{_su_v:.1f}%" if _su_v is not None else "—"
+            _es_h = (_excel_data.get(_cl) or {}).get("Ending Stocks")
+            _dc_h = (_excel_data.get(_cl) or {}).get("Dom. Consumption")
+            _ex_h = (_excel_data.get(_cl) or {}).get("Exports")
+            if _es_h is not None and (_dc_h is not None or _ex_h is not None):
+                _tu_h = (_dc_h or 0) + (_ex_h or 0)
+                _su_h = _es_h / _tu_h * 100 if _tu_h > 0 else None
+                _su_str = f"{_su_h:.1f}%" if _su_h is not None else "—"
             else:
                 _su_str = "—"
             _htbody += f"<td style='{_su_val_td}'>{_su_str}</td>"
@@ -3845,245 +4092,87 @@ with tab_wasde:
             f"{_hthead}<tbody>{_htbody}</tbody></table></div>",
             unsafe_allow_html=True,
         )
-
-        # Legend
-        _excel_found = bool(_excel_data)
-        _nass_found  = any(any(v is not None for v in d.values()) for d in _nass_data.values())
-        if _excel_found:
+        if _excel_data:
             st.markdown(
-                f"<p style='color:{TEAL};font-size:11px;margin:0'>🟢 Teal column headers = WASDE balance sheet data from USDA WASDE Excel files.</p>",
-                unsafe_allow_html=True,
-            )
-        elif _nass_found:
-            st.info(
-                "Balance sheet history (Beg. Stocks, Exports, etc.) requires USDA WASDE monthly Excel "
-                "files. NASS production/area/yield rows load automatically. Excel files are fetched from "
-                "usda.gov — if columns show only dashes, the files may be temporarily unavailable."
-            )
-
-    # ── Country Detail ────────────────────────────────────────────────────────
-    with wt_country:
-        with st.spinner("Loading country list…"):
-            _ctry_map2 = load_psd_countries()
-
-        _ctry_options = [f"{name} ({code})" for code, name in _ctry_map2.items()]
-        if not _ctry_options:
-            st.warning("Could not load country list from FAS PSD. The API may be temporarily unavailable.")
-            st.stop()
-        _ctry_default = next(
-            (i for i, s in enumerate(_ctry_options) if "United States" in s), 0)
-        _ctry_sel = st.selectbox(
-            "Select country", _ctry_options, index=_ctry_default, key="wasde_country")
-        if not _ctry_sel:
-            st.stop()
-        _sel_code = _ctry_sel.split("(")[-1].rstrip(")")
-        _sel_name = _ctry_sel.split(" (")[0]
-
-        _cd_y0 = wasde_year - 9
-        with st.spinner(f"Loading {_sel_name} history…"):
-            _cd_hist = load_psd_country_history(psd_code, _sel_code, _cd_y0, wasde_year)
-
-        if _cd_hist.empty:
-            st.warning(f"No data found for **{_sel_name}** / **{commodity}** from FAS PSD.")
-        else:
-            _cd_ul, _cd_div = _psd_unit_label(_cd_hist)
-            _cd_yrs = sorted(_cd_hist["marketYear"].unique()) if "marketYear" in _cd_hist.columns else []
-
-            def _cd_series(attr_key: str) -> list:
-                out = []
-                for yr in _cd_yrs:
-                    sub = _cd_hist[_cd_hist["marketYear"] == yr] if "marketYear" in _cd_hist.columns else pd.DataFrame()
-                    out.append(_psd_attr(sub, attr_key))
-                return out
-
-            _cd_metrics = [
-                ("Production",      "Production",      TEAL),
-                ("Exports",         "Exports",         AMBER),
-                ("Dom. Consumption","Dom. Consumption","#e06c75"),
-                ("Ending Stocks",   "Ending Stocks",   WHITE),
-            ]
-
-            col_cd_l, col_cd_r = st.columns(2, gap="medium")
-
-            # Line chart — key metrics over time
-            fig_cd = go.Figure()
-            for attr_key, lbl, clr in _cd_metrics:
-                series = _cd_series(attr_key)
-                disp   = [v / _cd_div if v is not None else None for v in series]
-                fig_cd.add_trace(go.Scatter(
-                    x=_cd_yrs, y=disp, name=lbl,
-                    mode="lines+markers",
-                    line=dict(color=clr, width=2),
-                    marker=dict(size=5),
-                ))
-            _base_layout(fig_cd,
-                         title=f"{_sel_name} — {commodity} ({_cd_ul})",
-                         height=420)
-            fig_cd.update_yaxes(tickformat=",.0f", title=_cd_ul)
-            fig_cd.update_layout(legend=dict(orientation="h", y=-0.18, x=0))
-            col_cd_l.plotly_chart(fig_cd, use_container_width=True)
-
-            # S/U ratio over time
-            _cd_su = []
-            for yr in _cd_yrs:
-                sub = _cd_hist[_cd_hist["marketYear"] == yr] if "marketYear" in _cd_hist.columns else pd.DataFrame()
-                es = _psd_attr(sub, "Ending Stocks")
-                tc = _psd_attr(sub, "Dom. Consumption")
-                ex = _psd_attr(sub, "Exports")
-                tu = (tc or 0) + (ex or 0)
-                _cd_su.append(es / tu * 100 if (es is not None and tu > 0) else None)
-
-            su_clrs = ["#4ade80" if (v or 99) < 15 else AMBER if (v or 99) < 25 else "#f87171"
-                       for v in _cd_su]
-            fig_cd_su = go.Figure(go.Bar(
-                x=_cd_yrs, y=_cd_su,
-                marker_color=su_clrs,
-                text=[f"{v:.1f}%" if v is not None else "" for v in _cd_su],
-                textposition="outside",
-                textfont=dict(color=WHITE, size=9),
-            ))
-            _base_layout(fig_cd_su,
-                         title=f"{_sel_name} — {commodity} S/U Ratio (%)",
-                         height=420)
-            fig_cd_su.update_yaxes(ticksuffix="%", tickformat=".1f")
-            fig_cd_su.update_layout(showlegend=False)
-            col_cd_r.plotly_chart(fig_cd_su, use_container_width=True)
-
-            # Balance sheet table for most recent year
-            st.markdown(
-                f"<p style='color:{GRAY};font-size:12px;font-weight:700;text-transform:uppercase;"
-                f"letter-spacing:.06em;margin:16px 0 6px'>"
-                f"{_sel_name} Balance Sheet — {wasde_year} "
-                f"<span style='color:{TEAL}'>({_cd_ul})</span></p>",
-                unsafe_allow_html=True,
-            )
-            _cur_yr_sub = _cd_hist[_cd_hist["marketYear"] == wasde_year] if "marketYear" in _cd_hist.columns else pd.DataFrame()
-            _prv_yr_sub = _cd_hist[_cd_hist["marketYear"] == wasde_year - 1] if "marketYear" in _cd_hist.columns else pd.DataFrame()
-            _cd_bs_thead = (
-                f"<thead><tr>"
-                f"<th style='{_WTH0}'>Item</th>"
-                f"<th style='{_WTH}'>{wasde_year - 1}</th>"
-                f"<th style='{_WTH}'>{wasde_year}</th>"
-                f"<th style='{_WTHD}'>YoY Chg</th>"
-                f"</tr></thead>"
-            )
-            _cd_bs_tbody = ""
-            _cd_alt = 0
-            for attr_key, disp_lbl, row_type in PSD_BS_ROWS:
-                v_cur = _psd_attr(_cur_yr_sub, attr_key)
-                v_prv = _psd_attr(_prv_yr_sub, attr_key)
-                if v_cur is None and v_prv is None:
-                    continue
-                bg, lbl_c, num_c = _w_row_style(row_type, _cd_alt % 2 == 1)
-                if row_type not in ("total", "stocks"):
-                    _cd_alt += 1
-                fw = "700" if row_type in ("total", "stocks") else "400"
-                _t0 = (f"padding:6px 12px;text-align:left;background:{bg};"
-                       f"color:{lbl_c};font-weight:{fw};font-size:12px;")
-                _tn = (f"padding:6px 12px;text-align:right;background:{bg};"
-                       f"color:{num_c};font-weight:{fw};font-size:12px;")
-                chg_txt, chg_clr, chg_bg = _w_chg_cell(v_cur, v_prv, _cd_div)
-                _tc = (f"padding:6px 12px;text-align:right;background:{chg_bg};"
-                       f"color:{chg_clr};font-weight:700;font-size:12px;"
-                       f"border-left:2px solid #4a5568;")
-                if attr_key == "Ending Stocks":
-                    _cd_bs_tbody += (
-                        f"<tr><td colspan='4' style='height:2px;background:{TEAL_DIM};'></td></tr>"
-                    )
-                _cd_bs_tbody += (
-                    f"<tr>"
-                    f"<td style='{_t0}'>{disp_lbl}</td>"
-                    f"<td style='{_tn}'>{_psd_fmt(v_prv, _cd_div)}</td>"
-                    f"<td style='{_tn}'>{_psd_fmt(v_cur, _cd_div)}</td>"
-                    f"<td style='{_tc}'>{chg_txt}</td>"
-                    f"</tr>"
-                )
-            st.markdown(
-                f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;"
-                f"margin-bottom:12px;'>"
-                f"<table style='border-collapse:collapse;width:60%;font-family:Open Sans,sans-serif;'>"
-                f"<thead>{_cd_bs_thead}</thead><tbody>{_cd_bs_tbody}</tbody></table></div>",
+                f"<p style='color:{TEAL};font-size:11px;margin:0'>🟢 Teal column headers = USDA WASDE Excel balance sheet data.</p>",
                 unsafe_allow_html=True,
             )
 
-    # ── Multi-Commodity S/U ───────────────────────────────────────────────────
-    with wt_multi:
-        _su_y0 = wasde_year - 14
-        _su_yrs = list(range(_su_y0, wasde_year + 1))
-
-        _scope = st.radio("Scope", ["US", "World"], horizontal=True, key="su_scope")
+    # ══════════════════════════════════════════════════════════════════════════
+    # 9 — Multi-Commodity S/U
+    # ══════════════════════════════════════════════════════════════════════════
+    with st.expander("📈  Multi-Commodity S/U", expanded=False):
+        _msu_y0  = _w_yr_end - 14
+        _msu_yrs = list(range(_msu_y0, _w_yr_end + 1))
+        _scope   = st.radio("Scope", ["US", "World"], horizontal=True, key="su_scope")
 
         with st.spinner("Loading multi-commodity S/U data…"):
-            _su_data: dict = {}  # {comm_name: {yr: (es, total_use)}}
-            for _cn, _cc in PSD_SU_COMMODITIES:
-                _su_data[_cn] = {}
-                for yr in _su_yrs:
-                    if _scope == "US":
-                        df_yr = load_psd_country_year(_cc, "US", yr)
-                    else:
-                        df_yr = load_psd_world_year(_cc, yr)
-                    es = _psd_attr(df_yr, "Ending Stocks")
-                    tc = _psd_attr(df_yr, "Dom. Consumption")
-                    ex = _psd_attr(df_yr, "Exports")
-                    tu = (tc or 0) + (ex or 0)
-                    _su_data[_cn][yr] = es / tu * 100 if (es is not None and tu > 0) else None
+            _su_data2: dict = {}
+            for _cn, _cc_su in PSD_SU_COMMODITIES:
+                _su_data2[_cn] = {}
+                for yr in _msu_yrs:
+                    df_yr = (load_psd_country_year(_cc_su, "US", yr) if _scope == "US"
+                             else load_psd_world_year(_cc_su, yr))
+                    _es = _psd_attr(df_yr, "Ending Stocks")
+                    _tc = _psd_attr(df_yr, "Dom. Consumption")
+                    _ex = _psd_attr(df_yr, "Exports")
+                    _tu = (_tc or 0) + (_ex or 0)
+                    _su_data2[_cn][yr] = _es / _tu * 100 if (_es is not None and _tu > 0) else None
 
         fig_multi = go.Figure()
-        _su_colors = [TEAL, AMBER, "#e06c75"]
-        for i, (_cn, _cc) in enumerate(PSD_SU_COMMODITIES):
-            series = [_su_data[_cn].get(yr) for yr in _su_yrs]
+        _su_colors_m = [TEAL, AMBER, "#e06c75"]
+        for _i_m, (_cn, _cc_su) in enumerate(PSD_SU_COMMODITIES):
+            _series = [_su_data2[_cn].get(yr) for yr in _msu_yrs]
             fig_multi.add_trace(go.Scatter(
-                x=_su_yrs, y=series, name=_cn,
+                x=_msu_yrs, y=_series, name=_cn,
                 mode="lines+markers",
-                line=dict(color=_su_colors[i], width=2.5),
+                line=dict(color=_su_colors_m[_i_m], width=2.5),
                 marker=dict(size=6),
             ))
         _base_layout(fig_multi,
-                     title=f"{'US' if _scope == 'US' else 'World'} Stocks-to-Use Ratio — Corn / Soybeans / Wheat",
+                     title=f"{'US' if _scope == 'US' else 'World'} Stocks-to-Use — Corn / Soybeans / Wheat",
                      height=460)
         fig_multi.update_yaxes(ticksuffix="%", tickformat=".1f", title="S/U Ratio (%)")
         fig_multi.update_layout(
             legend=dict(orientation="h", y=-0.12, x=0.3),
             hovermode="x unified",
         )
-        # Reference lines
-        for level, label, clr in [(15, "Tight (15%)", "#f87171"), (20, "Normal (20%)", AMBER)]:
-            fig_multi.add_hline(y=level, line_dash="dot", line_color=clr, line_width=1,
-                                annotation_text=label, annotation_font_color=clr,
+        for _lvl, _llbl, _lclr in [(15, "Tight (15%)", "#f87171"), (20, "Normal (20%)", AMBER)]:
+            fig_multi.add_hline(y=_lvl, line_dash="dot", line_color=_lclr, line_width=1,
+                                annotation_text=_llbl, annotation_font_color=_lclr,
                                 annotation_position="top right")
         st.plotly_chart(fig_multi, use_container_width=True)
 
-        # Summary table: current year S/U for each commodity
         _sum_rows = ""
-        for _cn, _cc in PSD_SU_COMMODITIES:
-            cur_su = _su_data[_cn].get(wasde_year)
-            prv_su = _su_data[_cn].get(wasde_year - 1)
-            cur_str = f"{cur_su:.1f}%" if cur_su is not None else "—"
-            prv_str = f"{prv_su:.1f}%" if prv_su is not None else "—"
-            chg = (cur_su - prv_su) if (cur_su is not None and prv_su is not None) else None
-            chg_str = f"{chg:+.1f} pp" if chg is not None else "—"
-            chg_clr = "#4ade80" if (chg or 0) < 0 else ("#f87171" if (chg or 0) > 0 else GRAY)
+        for _cn, _cc_su in PSD_SU_COMMODITIES:
+            _cur_su = _su_data2[_cn].get(_w_yr_end)
+            _prv_su = _su_data2[_cn].get(_w_yr_end - 1)
+            _cur_str = f"{_cur_su:.1f}%" if _cur_su is not None else "—"
+            _prv_str = f"{_prv_su:.1f}%" if _prv_su is not None else "—"
+            _chg_su  = (_cur_su - _prv_su) if (_cur_su is not None and _prv_su is not None) else None
+            _chg_str = f"{_chg_su:+.1f} pp" if _chg_su is not None else "—"
+            _chg_clr_su = "#4ade80" if (_chg_su or 0) < 0 else ("#f87171" if (_chg_su or 0) > 0 else GRAY)
             _sum_rows += (
                 f"<tr>"
-                f"<td style='padding:7px 14px;color:{WHITE};font-weight:600;font-size:12px;'>{_cn}</td>"
-                f"<td style='padding:7px 14px;text-align:right;color:{GRAY};font-size:12px;'>{prv_str}</td>"
-                f"<td style='padding:7px 14px;text-align:right;color:{AMBER};font-weight:700;font-size:12px;'>{cur_str}</td>"
-                f"<td style='padding:7px 14px;text-align:right;color:{chg_clr};font-weight:700;font-size:12px;'>{chg_str}</td>"
+                f"<td style='padding:7px 14px;color:{WHITE};font-weight:600;font-size:12px'>{_cn}</td>"
+                f"<td style='padding:7px 14px;text-align:right;color:{GRAY};font-size:12px'>{_prv_str}</td>"
+                f"<td style='padding:7px 14px;text-align:right;color:{AMBER};font-weight:700;font-size:12px'>{_cur_str}</td>"
+                f"<td style='padding:7px 14px;text-align:right;color:{_chg_clr_su};font-weight:700;font-size:12px'>{_chg_str}</td>"
                 f"</tr>"
             )
-        _sum_thead = (
+        _sum_th = (
             f"<thead><tr>"
             f"<th style='{_WTH0}'>Commodity</th>"
-            f"<th style='{_WTH}'>{wasde_year - 1} S/U</th>"
-            f"<th style='{_WTH}'>{wasde_year} S/U</th>"
+            f"<th style='{_WTH}'>{_w_yr_end - 1} S/U</th>"
+            f"<th style='{_WTH}'>{_w_yr_end} S/U</th>"
             f"<th style='{_WTHD}'>YoY Change</th>"
             f"</tr></thead>"
         )
         st.markdown(
             f"<div style='overflow-x:auto;border-radius:8px;border:1px solid #4a5568;"
-            f"margin-bottom:12px;margin-top:8px;'>"
+            f"margin-bottom:12px;margin-top:8px'>"
             f"<table style='border-collapse:collapse;width:50%;font-family:Open Sans,sans-serif;"
-            f"background:{DARK_CARD};'>"
-            f"<thead>{_sum_thead}</thead><tbody>{_sum_rows}</tbody></table></div>",
+            f"background:{DARK_CARD}'>"
+            f"{_sum_th}<tbody>{_sum_rows}</tbody></table></div>",
             unsafe_allow_html=True,
         )
