@@ -653,14 +653,14 @@ def _nom_chg_str(chg, metric, no_unit=False) -> str:
         unit = metric.split("(")[-1].replace(")", "").strip()
         return f"{sign}{chg:.1f}" if no_unit else f"{sign}{chg:.1f} {unit}"
     if "Acres" in metric:
-        return f"{sign}{chg / 1_000_000:.1f}M" if no_unit else f"{sign}{chg / 1_000_000:.1f}M Ac"
+        return f"{sign}{chg / 1_000_000:.1f}" if no_unit else f"{sign}{chg / 1_000_000:.1f}M Ac"
     if "Production" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bales" in unit:
-            return f"{sign}{chg / 1_000:.0f}K" if no_unit else f"{sign}{chg / 1_000:.0f}K Bales"
-        if "Bu"  in unit: return f"{sign}{chg / 1_000_000:.0f}M" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Bu"
-        if "Ton" in unit: return f"{sign}{chg / 1_000_000:.0f}M" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Tons"
-        if "Lb"  in unit: return f"{sign}{chg / 1_000_000:.0f}M" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Lbs"
+            return f"{sign}{chg / 1_000:.0f}" if no_unit else f"{sign}{chg / 1_000:.0f}K Bales"
+        if "Bu"  in unit: return f"{sign}{chg / 1_000_000:.0f}" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Bu"
+        if "Ton" in unit: return f"{sign}{chg / 1_000_000:.0f}" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Tons"
+        if "Lb"  in unit: return f"{sign}{chg / 1_000_000:.0f}" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Lbs"
     return f"{sign}{chg:.1f}"
 
 def _tbl_unit(metric) -> str:
