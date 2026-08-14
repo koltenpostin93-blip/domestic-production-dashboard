@@ -643,23 +643,24 @@ def _tbl_num(v, metric) -> str:
         return f"{round(v / 1_000):,}" if "Bales" in unit else f"{round(v / 1_000_000):,}"
     return f"{round(v):,}"
 
-def _nom_chg_str(chg, metric) -> str:
-    """Signed nominal change in display units, 1 decimal. e.g. '+50.3M Bu'"""
+def _nom_chg_str(chg, metric, no_unit=False) -> str:
+    """Signed nominal change in display units, 1 decimal. e.g. '+50.3M Bu'
+    Pass no_unit=True for bar labels where the axis/title already shows the unit."""
     if chg is None or (isinstance(chg, float) and pd.isna(chg)):
         return "N/A"
     sign = "+" if chg >= 0 else ""
     if "Yield" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
-        return f"{sign}{chg:.1f} {unit}"
+        return f"{sign}{chg:.1f}" if no_unit else f"{sign}{chg:.1f} {unit}"
     if "Acres" in metric:
-        return f"{sign}{chg / 1_000_000:.1f}M Ac"
+        return f"{sign}{chg / 1_000_000:.1f}M" if no_unit else f"{sign}{chg / 1_000_000:.1f}M Ac"
     if "Production" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bales" in unit:
-            return f"{sign}{chg / 1_000:.1f}K Bales"
-        if "Bu"  in unit: return f"{sign}{chg / 1_000_000:.1f}M Bu"
-        if "Ton" in unit: return f"{sign}{chg / 1_000_000:.1f}M Tons"
-        if "Lb"  in unit: return f"{sign}{chg / 1_000_000:.1f}M Lbs"
+            return f"{sign}{chg / 1_000:.0f}K" if no_unit else f"{sign}{chg / 1_000:.0f}K Bales"
+        if "Bu"  in unit: return f"{sign}{chg / 1_000_000:.0f}M" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Bu"
+        if "Ton" in unit: return f"{sign}{chg / 1_000_000:.0f}M" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Tons"
+        if "Lb"  in unit: return f"{sign}{chg / 1_000_000:.0f}M" if no_unit else f"{sign}{chg / 1_000_000:.0f}M Lbs"
     return f"{sign}{chg:.1f}"
 
 def _tbl_unit(metric) -> str:
@@ -1864,7 +1865,14 @@ with tab_state:
                     return GREEN if pos else RED
                 bar_colors = [_chg_bar_clr(row) for _, row in top15.iterrows()]
                 bar_y      = top15["color_val"]
-                bar_text   = top15["lbl_str"]
+                # Bar labels: strip unit suffix (title/axis already shows it);
+                # for nominal mode rebuild with no_unit=True so "M Bu" is dropped
+                if chg_display == "% Change":
+                    bar_text = top15["lbl_str"]
+                else:
+                    bar_text = top15["color_val"].apply(
+                        lambda v: _nom_chg_str(v, map_metric, no_unit=True)
+                    )
                 bar_hover  = (
                     f"<b>%{{x}}</b><br>"
                     f"{map_view}: %{{customdata[0]}}<br>"
