@@ -611,22 +611,22 @@ def _fmt(v: float, metric: str) -> str:
 def _ytick(metric: str) -> str:
     return ".1f" if ("Yield" in metric or "/Ac" in metric) else ",.0f"
 
-def _bar_label(v: float, metric: str) -> str:
+def _bar_label(v: float, metric: str, no_unit: bool = False) -> str:
     if "Yield" in metric:
-        unit = metric.split("(")[-1].replace(")", "").strip()   # Bu/Ac, Lb/Ac, Tons/Ac
-        return f"{v:.0f} {unit}"
+        unit = metric.split("(")[-1].replace(")", "").strip()
+        return f"{v:.0f}" if no_unit else f"{v:.0f} {unit}"
     if "Acres" in metric:
-        return f"{v/1_000_000:.1f}M Ac"
+        return f"{v/1_000_000:.1f}M" if no_unit else f"{v/1_000_000:.1f}M Ac"
     if "Production" in metric or "Stocks" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bu" in unit:
-            return f"{v/1_000_000:.0f}M Bu"
+            return f"{v/1_000_000:.0f}M" if no_unit else f"{v/1_000_000:.0f}M Bu"
         elif "Lb" in unit:
-            return f"{v/1_000_000:.0f}M Lbs"
+            return f"{v/1_000_000:.0f}M" if no_unit else f"{v/1_000_000:.0f}M Lbs"
         elif "Ton" in unit:
-            return f"{v/1_000_000:.0f}M Tons"
+            return f"{v/1_000_000:.0f}M" if no_unit else f"{v/1_000_000:.0f}M Tons"
         elif "Bales" in unit:
-            return f"{v/1_000:.0f}K Bales"
+            return f"{v/1_000:.0f}K" if no_unit else f"{v/1_000:.0f}K Bales"
     return _fmt(v, metric)
 
 def _tbl_num(v, metric) -> str:
@@ -1562,7 +1562,7 @@ with tab_state:
             if map_view == "Value":
                 metric_snap["color_val"] = metric_snap["value"]
                 metric_snap["lbl_str"]   = metric_snap["value"].apply(
-                    lambda v: _bar_label(v, map_metric))
+                    lambda v: _bar_label(v, map_metric, no_unit=True))
                 metric_snap["hover_a"] = metric_snap["chg_pct_str"]
                 metric_snap["hover_b"] = metric_snap["chg_nom_str"]
                 metric_snap["hover_c"] = ""
@@ -1846,7 +1846,7 @@ with tab_state:
                     for _, row in top15.iterrows()
                 ]
                 bar_y      = top15["value"]
-                bar_text   = top15["value"].apply(lambda v: _bar_label(v, map_metric))
+                bar_text   = top15["value"].apply(lambda v: _bar_label(v, map_metric, no_unit=True))
                 bar_hover  = (
                     f"<b>%{{x}}</b><br>{map_metric}: %{{y:{_ytick(map_metric)}}}"
                     "<extra></extra>"
