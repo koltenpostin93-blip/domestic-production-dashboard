@@ -1585,7 +1585,7 @@ with tab_state:
                 if lbl_display == "% Change":
                     metric_snap["lbl_str"] = _pct.apply(_pct_str)
                 else:
-                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
+                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric, no_unit=True))
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["prior_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
@@ -1627,7 +1627,7 @@ with tab_state:
                 if lbl_display == "% Change":
                     metric_snap["lbl_str"] = _pct.apply(_pct_str)
                 else:
-                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
+                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric, no_unit=True))
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["state_avg"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
@@ -1665,7 +1665,7 @@ with tab_state:
                 if lbl_display == "% Change":
                     metric_snap["lbl_str"] = _pct.apply(_pct_str)
                 else:
-                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
+                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric, no_unit=True))
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["comp_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
@@ -1704,7 +1704,7 @@ with tab_state:
                 if lbl_display == "% Change":
                     metric_snap["lbl_str"] = _pct.apply(_pct_str)
                 else:
-                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric))
+                    metric_snap["lbl_str"] = _diff.apply(lambda v: _nom_chg_str(v, map_metric, no_unit=True))
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["comp_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
