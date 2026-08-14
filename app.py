@@ -1817,63 +1817,26 @@ with tab_state:
             else:
                 c1.caption("Click a state on the map")
 
-            # ── Top-15 bar ───────────────────────────────────────────────────
-            if map_view == "Value":
-                top15 = metric_snap.sort_values("value", ascending=False).head(15)
-                bar_colors = [
-                    TEAL if row["state_abbr"] == selected_abbr else TEAL_DIM
-                    for _, row in top15.iterrows()
-                ]
-                bar_y       = top15["value"]
-                bar_text    = top15["value"].apply(lambda v: _bar_label(v, map_metric))
-                bar_hover   = (
-                    f"<b>%{{x}}</b><br>"
-                    f"{map_metric}: %{{y:{_ytick(map_metric)}}}"
-                    "<extra></extra>"
-                )
-                bar_ytick   = _ytick(map_metric)
-                bar_title   = f"Top 15 States — {map_metric} ({map_year})"
-                customdata  = None
-            else:
-                top15 = (
-                    metric_snap.dropna(subset=["color_val"])
-                    .assign(_abs=lambda df: df["color_val"].abs())
-                    .sort_values("_abs", ascending=False)
-                    .drop(columns=["_abs"])
-                    .head(15)
-                )
-                def _chg_bar_clr(row):
-                    pos = row["color_val"] >= 0
-                    if selected_abbr and row["state_abbr"] != selected_abbr:
-                        return "rgba(34,197,94,0.4)" if pos else "rgba(239,68,68,0.4)"
-                    return GREEN if pos else RED
-                bar_colors  = [_chg_bar_clr(row) for _, row in top15.iterrows()]
-                bar_y       = top15["color_val"]
-                bar_text    = top15["lbl_str"]
-                bar_hover   = (
-                    f"<b>%{{x}}</b><br>"
-                    f"{map_view}: %{{customdata[0]}}<br>"
-                    f"{map_metric} ({map_year}): %{{customdata[1]}}"
-                    "<extra></extra>"
-                )
-                bar_ytick   = ".1f%" if chg_display == "% Change" else _ytick(map_metric)
-                bar_title   = f"Top 15 States — {map_metric} {map_view} ({map_year})"
-                customdata  = list(zip(
-                    top15["lbl_str"],
-                    top15["value"].apply(lambda v: _bar_label(v, map_metric)),
-                ))
+            # ── Top-15 bar (always shows absolute production value) ───────────
+            top15 = metric_snap.sort_values("value", ascending=False).head(15)
+            bar_colors = [
+                TEAL if row["state_abbr"] == selected_abbr else TEAL_DIM
+                for _, row in top15.iterrows()
+            ]
             fig_bar = go.Figure(go.Bar(
                 x=top15["state_abbr"],
-                y=bar_y,
+                y=top15["value"],
                 marker_color=bar_colors,
-                customdata=customdata,
-                text=bar_text,
+                text=top15["value"].apply(lambda v: _bar_label(v, map_metric)),
                 textposition="outside",
-                textfont=dict(color=WHITE, size=11),
-                hovertemplate=bar_hover,
+                textfont=dict(color=TXT_SEC, size=11),
+                hovertemplate=(
+                    f"<b>%{{x}}</b><br>{map_metric}: %{{y:{_ytick(map_metric)}}}"
+                    "<extra></extra>"
+                ),
             ))
-            _base_layout(fig_bar, title=bar_title, height=400)
-            fig_bar.update_yaxes(tickformat=bar_ytick)
+            _base_layout(fig_bar, title=f"Top 15 States — {map_metric} ({map_year})", height=400)
+            fig_bar.update_yaxes(tickformat=_ytick(map_metric))
             fig_bar.update_layout(showlegend=False)
             st.plotly_chart(fig_bar, use_container_width=True)
 
