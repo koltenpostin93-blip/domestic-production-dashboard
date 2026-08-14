@@ -1014,11 +1014,11 @@ def _base_layout(fig, title="", height=390):
     fig.add_layout_image(dict(
         source=LOGO_COLOR,
         xref="paper", yref="paper",
-        x=1.0, y=0.0,
-        xanchor="right", yanchor="bottom",
-        sizex=0.22, sizey=0.22,
-        opacity=0.12,
-        layer="above",
+        x=0.5, y=0.5,
+        xanchor="center", yanchor="middle",
+        sizex=0.28, sizey=0.28,
+        opacity=0.10,
+        layer="below",
     ))
     return fig
 
@@ -1786,6 +1786,16 @@ with tab_state:
                 showlegend=False, hoverinfo="skip",
             ))
 
+            fig_map.add_layout_image(dict(
+                source=LOGO_COLOR,
+                xref="paper", yref="paper",
+                x=0.99, y=0.01,
+                xanchor="right", yanchor="bottom",
+                sizex=0.18, sizey=0.18,
+                opacity=0.13,
+                layer="above",
+            ))
+
             # Map is the filter — click a state to select it
             map_event = st.plotly_chart(
                 fig_map,
@@ -2209,10 +2219,13 @@ with tab_state:
                     )
 
                 st.markdown(
-                    f"<div style='overflow-x:auto;border-radius:8px;border:1px solid {BORDER};"
+                    f"<div style='position:relative;border-radius:8px;border:1px solid {BORDER};"
                     f"margin-bottom:12px;'>"
+                    f"<div style='overflow-x:auto;'>"
                     f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif;'>"
-                    f"{thead_html}<tbody>{tbody_html}</tbody></table></div>",
+                    f"{thead_html}<tbody>{tbody_html}</tbody></table></div>"
+                    f"<img src='{LOGO_COLOR}' style='position:absolute;bottom:8px;right:10px;"
+                    f"height:44px;opacity:0.12;pointer-events:none;z-index:1;' /></div>",
                     unsafe_allow_html=True,
                 )
                 _render_export_buttons(
@@ -2794,10 +2807,13 @@ with tab_stocks:
                     )
 
                 st.markdown(
-                    f"<div style='overflow-x:auto;border-radius:8px;border:1px solid {BORDER};"
+                    f"<div style='position:relative;border-radius:8px;border:1px solid {BORDER};"
                     f"margin-bottom:12px;'>"
+                    f"<div style='overflow-x:auto;'>"
                     f"<table style='border-collapse:collapse;width:100%;font-family:Open Sans,sans-serif;'>"
-                    f"{sk_thead}<tbody>{sk_tbody}</tbody></table></div>",
+                    f"{sk_thead}<tbody>{sk_tbody}</tbody></table></div>"
+                    f"<img src='{LOGO_COLOR}' style='position:absolute;bottom:8px;right:10px;"
+                    f"height:44px;opacity:0.12;pointer-events:none;z-index:1;' /></div>",
                     unsafe_allow_html=True,
                 )
                 _render_export_buttons(
