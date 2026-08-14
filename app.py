@@ -616,17 +616,17 @@ def _bar_label(v: float, metric: str, no_unit: bool = False) -> str:
         unit = metric.split("(")[-1].replace(")", "").strip()
         return f"{v:.0f}" if no_unit else f"{v:.0f} {unit}"
     if "Acres" in metric:
-        return f"{v/1_000_000:.1f}M" if no_unit else f"{v/1_000_000:.1f}M Ac"
+        return f"{v/1_000_000:.1f}" if no_unit else f"{v/1_000_000:.1f}M Ac"
     if "Production" in metric or "Stocks" in metric:
         unit = metric.split("(")[-1].replace(")", "").strip()
         if "Bu" in unit:
-            return f"{v/1_000_000:.0f}M" if no_unit else f"{v/1_000_000:.0f}M Bu"
+            return f"{v/1_000_000:.0f}" if no_unit else f"{v/1_000_000:.0f}M Bu"
         elif "Lb" in unit:
-            return f"{v/1_000_000:.0f}M" if no_unit else f"{v/1_000_000:.0f}M Lbs"
+            return f"{v/1_000_000:.0f}" if no_unit else f"{v/1_000_000:.0f}M Lbs"
         elif "Ton" in unit:
-            return f"{v/1_000_000:.0f}M" if no_unit else f"{v/1_000_000:.0f}M Tons"
+            return f"{v/1_000_000:.0f}" if no_unit else f"{v/1_000_000:.0f}M Tons"
         elif "Bales" in unit:
-            return f"{v/1_000:.0f}K" if no_unit else f"{v/1_000:.0f}K Bales"
+            return f"{v/1_000:.0f}" if no_unit else f"{v/1_000:.0f}K Bales"
     return _fmt(v, metric)
 
 def _tbl_num(v, metric) -> str:
@@ -1551,7 +1551,7 @@ with tab_state:
 
             # ── Build color column per view mode ──────────────────────────────
             diverging   = False
-            map_cscale  = [[0, "#1a2a2c"], [0.4, "#5ba5af"], [1, "#b8dde2"]]
+            map_cscale  = [[0, "#e8f5f7"], [0.4, "#5ba5af"], [1, "#164e5a"]]
             color_range = None
             cbar_title  = map_metric
 
