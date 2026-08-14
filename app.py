@@ -3867,10 +3867,15 @@ with tab_wasde:
             _ctry_map2 = load_psd_countries()
 
         _ctry_options = [f"{name} ({code})" for code, name in _ctry_map2.items()]
+        if not _ctry_options:
+            st.warning("Could not load country list from FAS PSD. The API may be temporarily unavailable.")
+            st.stop()
         _ctry_default = next(
             (i for i, s in enumerate(_ctry_options) if "United States" in s), 0)
         _ctry_sel = st.selectbox(
             "Select country", _ctry_options, index=_ctry_default, key="wasde_country")
+        if not _ctry_sel:
+            st.stop()
         _sel_code = _ctry_sel.split("(")[-1].rstrip(")")
         _sel_name = _ctry_sel.split(" (")[0]
 
