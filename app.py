@@ -957,7 +957,10 @@ def load_revision_data(commodity: str, metric: str, y0: int, y1: int,
     if commodity not in COMMODITIES or metric not in COMMODITIES[commodity]:
         return pd.DataFrame()
     mp   = COMMODITIES[commodity][metric]
-    base = {k: v for k, v in mp.items() if k != "reference_period_desc"}
+    # Drop reference_period_desc (want all periods) AND source_desc (want both
+    # SURVEY final values and FORECAST monthly estimates)
+    base = {k: v for k, v in mp.items()
+            if k not in ("reference_period_desc", "source_desc")}
     df   = _fetch({
         **base,
         "agg_level_desc": agg_level,
