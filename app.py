@@ -1589,8 +1589,10 @@ with tab_state:
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["prior_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
-                metric_snap["hover_c"] = _pct.apply(_pct_str) + "  (" + _diff.apply(
-                    lambda v: _nom_chg_str(v, map_metric)) + ")"
+                metric_snap["hover_c"] = [
+                    f"{_pct_str(p)}  ({_nom_chg_str(d, map_metric)})"
+                    for p, d in zip(_pct, _diff)
+                ]
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
                     f"vs LY: %{{customdata[4]}}<br>"
@@ -1629,8 +1631,10 @@ with tab_state:
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["state_avg"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
-                metric_snap["hover_c"] = _pct.apply(_pct_str) + "  (" + _diff.apply(
-                    lambda v: _nom_chg_str(v, map_metric)) + ")"
+                metric_snap["hover_c"] = [
+                    f"{_pct_str(p)}  ({_nom_chg_str(d, map_metric)})"
+                    for p, d in zip(_pct, _diff)
+                ]
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
                     "vs Olympic Avg: %{customdata[4]}<br>"
@@ -1665,8 +1669,10 @@ with tab_state:
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["comp_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
-                metric_snap["hover_c"] = _pct.apply(_pct_str) + "  (" + _diff.apply(
-                    lambda v: _nom_chg_str(v, map_metric)) + ")"
+                metric_snap["hover_c"] = [
+                    f"{_pct_str(p)}  ({_nom_chg_str(d, map_metric)})"
+                    for p, d in zip(_pct, _diff)
+                ]
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
                     f"vs {comp_year}: %{{customdata[4]}}<br>"
@@ -1702,8 +1708,10 @@ with tab_state:
                 metric_snap["hover_a"] = metric_snap["value"].apply(lambda v: _bar_label(v, map_metric))
                 metric_snap["hover_b"] = metric_snap["comp_value"].apply(
                     lambda v: _bar_label(v, map_metric) if v is not None and not pd.isna(v) else "N/A")
-                metric_snap["hover_c"] = _pct.apply(_pct_str) + "  (" + _diff.apply(
-                    lambda v: _nom_chg_str(v, map_metric)) + ")"
+                metric_snap["hover_c"] = [
+                    f"{_pct_str(p)}  ({_nom_chg_str(d, map_metric)})"
+                    for p, d in zip(_pct, _diff)
+                ]
                 hover_tmpl = (
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
                     f"vs {_rp_prev_lbl}: %{{customdata[4]}}<br>"
