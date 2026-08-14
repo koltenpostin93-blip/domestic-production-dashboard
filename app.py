@@ -1782,7 +1782,7 @@ with tab_state:
             fig_map.add_trace(go.Scattergeo(
                 lat=lbl_lats, lon=lbl_lons, text=lbl_texts,
                 mode="text",
-                textfont=dict(color="black", size=8, family="Open Sans", weight="bold"),
+                textfont=dict(color="black", size=11, family="Open Sans", weight="bold"),
                 showlegend=False, hoverinfo="skip",
             ))
 
@@ -2497,7 +2497,7 @@ with tab_stocks:
                     lbl_texts.append(_sk_bar_lbl(row["disp_val"]))
             fig_sk.add_trace(go.Scattergeo(
                 lat=lbl_lats, lon=lbl_lons, text=lbl_texts, mode="text",
-                textfont=dict(color="black", size=8, family="Open Sans", weight="bold"),
+                textfont=dict(color="black", size=11, family="Open Sans", weight="bold"),
                 showlegend=False, hoverinfo="skip",
             ))
 
