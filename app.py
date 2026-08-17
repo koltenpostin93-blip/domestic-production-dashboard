@@ -318,7 +318,7 @@ PERIOD_SHORT = {
 # The line chart always shows every available period; these are the
 # key milestones for the column chart until we confirm more from NASS.
 KEY_CMP_ACRES   = ["Jun Acreage", "Final"]
-KEY_CMP_YLDPROD = ["Jun Fcst", "Aug Fcst", "Nov Fcst", "Final"]
+KEY_CMP_YLDPROD = ["May Fcst", "Jun Fcst", "Jul Fcst", "Aug Fcst", "Sep Fcst", "Oct Fcst", "Nov Fcst", "Final"]
 
 # 10-step color palette: dark→bright teal, last year = amber
 _REV_PALETTE = [
@@ -2404,7 +2404,7 @@ with tab_stocks:
 
         sk_cmp = st.radio(
             "Compare to",
-            ["vs Last Year", "vs Last Report"],
+            ["Value", "vs Last Year", "vs Last Report"],
             horizontal=True,
             label_visibility="collapsed",
             key="sk_cmp",
@@ -2425,9 +2425,12 @@ with tab_stocks:
             _prev_q, _prev_yr_delta = PREV_QUARTER[sk_quarter]
             _prev_yr  = stocks_year + _prev_yr_delta
             _cmp_label = f"{_prev_q} {_prev_yr}"
-        else:
+        elif sk_cmp == "vs Last Year":
             _prev_q, _prev_yr = sk_quarter, stocks_year - 1
             _cmp_label = str(stocks_year - 1)
+        else:  # "Value" — no comparison
+            _prev_q, _prev_yr = sk_quarter, stocks_year - 1
+            _cmp_label = None
 
         # ── Load snapshot + comparison period ────────────────────────────────
         with st.spinner("Fetching USDA NASS stocks data..."):
@@ -2520,13 +2523,17 @@ with tab_stocks:
                 ),
                 height=480, margin=dict(l=0, r=0, t=50, b=0), dragmode=False,
             )
+            _sk_cmp_hover = (
+                f"vs {_cmp_label}: " + "%{customdata[2]}  (%{customdata[3]})<br>"
+                if _cmp_label else ""
+            )
             fig_sk.update_traces(
                 selector=dict(type="choropleth"),
                 marker_line_color="white", marker_line_width=0.6,
                 hovertemplate=(
                     "<b>%{customdata[1]}</b> (%{customdata[0]})<br>"
                     + cbar_title + f": %{{z:{hover_val_fmt}}}{hover_val_sfx}<br>"
-                    f"vs {_cmp_label}: " + "%{customdata[2]}  (%{customdata[3]})<extra></extra>"
+                    + _sk_cmp_hover + "<extra></extra>"
                 ),
             )
             # All-states outline
@@ -2762,10 +2769,12 @@ with tab_stocks:
                         f"font-weight:700;font-size:11px;white-space:nowrap;"
                         f"border-bottom:2px solid {TEAL};border-left:2px solid {BORDER};")
 
+                _show_chg  = (sk_cmp != "Value")
                 chg_hdr    = f"ppt vs {_cmp_label}" if pct_mode else f"% vs {_cmp_label}"
                 yr_hdrs    = "".join(f"<th style='{_TH}'>{yr}</th>" for yr in sk_years)
+                _chg_th    = f"<th style='{_THD}'>{chg_hdr}</th>" if _show_chg else ""
                 sk_thead   = (f"<thead><tr><th style='{_TH0}'>State / Region</th>{yr_hdrs}"
-                              f"<th style='{_THD}'>{chg_hdr}</th>"
+                              f"{_chg_th}"
                               f"<th style='{_THS}'>6-Yr Olympic Avg</th>"
                               f"<th style='{_THP}'>% of Avg</th>"
                               f"<th style='{_THS}'>Min</th><th style='{_THS}'>Max</th>"
@@ -2776,7 +2785,7 @@ with tab_stocks:
                 for row in sk_rows:
                     rtype = row.get("row_type")
                     if rtype == "spacer":
-                        colspan = 1 + len(sk_years) + 6
+                        colspan = 1 + len(sk_years) + (5 if not _show_chg else 6)
                         sk_tbody += (f"<tr><td colspan='{colspan}' "
                                      f"style='height:9px;background:{BORDER};'></td></tr>")
                         continue
@@ -2847,9 +2856,10 @@ with tab_stocks:
                     pct_val = row.get("pct_us")
                     pct_str = "—" if (pct_val is None or pct_mode) else f"{pct_val:.1f}%"
 
+                    _chg_td = f"<td style='{td_chg}'>{chg_str}</td>" if _show_chg else ""
                     sk_tbody += (
                         f"<tr><td style='{td_lbl}'>{row['label']}</td>{yr_cells}"
-                        f"<td style='{td_chg}'>{chg_str}</td>"
+                        f"{_chg_td}"
                         f"<td style='{td_sp}'>{_sk_fmt_cell(row.get('olym'))}</td>"
                         f"<td style='{td_poa}'>{poa_str}</td>"
                         f"<td style='{td_sp}'>{_sk_fmt_cell(row.get('min_val'))}</td>"
@@ -3559,9 +3569,16 @@ with tab_wasde:
         )
         _sd_units = _sd_c2.radio("Units", ["Imperial", "Metric"], horizontal=True, key="sd_units_r")
 
-        _sd_ctry_disp = [_cc_name(cc) for cc in _w_ctry_codes] or ["World"]
+        # Build full sorted country list: World first, US second, rest ABC
+        _sd_name_to_cc = {"World": "World", **{name: code for code, name in _w_ctry_map.items() if code}}
+        _sd_all_sorted = sorted(n for n in _sd_name_to_cc if n != "World")
+        _us_name = _w_ctry_map.get("US", "United States")
+        if _us_name in _sd_all_sorted:
+            _sd_all_sorted.remove(_us_name)
+            _sd_all_sorted.insert(0, _us_name)
+        _sd_ctry_disp = ["World"] + _sd_all_sorted
         _sd_ctry_sel = _sd_c3.selectbox("Country", _sd_ctry_disp, key="sd_ctry")
-        _sd_cc = _w_ctry_codes[_sd_ctry_disp.index(_sd_ctry_sel)] if _sd_ctry_sel in _sd_ctry_disp else "World"
+        _sd_cc = _sd_name_to_cc.get(_sd_ctry_sel, "World")
 
         _sd_yrs = (_w_view_yrs[-5:] if len(_w_view_yrs) > 5 else _w_view_yrs) or [_w_yr_end]
 
