@@ -2730,73 +2730,54 @@ with tab_stocks:
             )
 
             if _has_prior_bar:
-                # ── Grouped bar: current (teal) + prior (gray), same 15 states ──
-                _cur_lbl = f"{sk_quarter} {stocks_year}"
-                _pri_lbl = _cmp_label if _cmp_label else "Prior"
-                bar_title = f"{bar_title_base}  vs  {_pri_lbl}"
+                # ── Diverging change bar (same pattern as Production tab) ────────
+                _pri_lbl   = _cmp_label if _cmp_label else "Prior"
+                _cur_lbl   = f"{sk_quarter} {stocks_year}"
+                bar_title  = f"{bar_title_base} vs {_pri_lbl}"
 
-                _cur_clrs = [TEAL if r["state_abbr"] == sk_selected_abbr else TEAL_DIM
-                             for _, r in top15_sk.iterrows()]
-                _pri_clrs = ["#6b7280" if r["state_abbr"] == sk_selected_abbr else "#9ca3af"
-                             for _, r in top15_sk.iterrows()]
+                # % change as bar height; hover shows nominal too
+                _bar_chg_pct = top15_sk["chg_pct"]
+                _bar_chg_nom = top15_sk["chg_nom_str"].fillna("N/A")
+                _bar_cur_fmt = top15_sk["disp_val"].apply(_sk_bar_lbl)
+                _bar_pri_fmt = top15_sk["prior_value"].apply(
+                    lambda v: _sk_bar_lbl(v) if pd.notna(v) else "N/A")
 
-                # customdata cols: [prior_fmt, chg_nom_str, chg_pct_str]
-                _cd = list(zip(
-                    top15_sk["prior_value"].apply(
-                        lambda v: _sk_bar_lbl(v) if pd.notna(v) else "N/A"),
-                    top15_sk["chg_nom_str"].fillna("N/A"),
-                    top15_sk["chg_pct_str"].fillna("N/A"),
-                ))
-                _cd_pri = list(zip(
-                    top15_sk["disp_val"].apply(_sk_bar_lbl),
-                    top15_sk["chg_nom_str"].fillna("N/A"),
-                    top15_sk["chg_pct_str"].fillna("N/A"),
-                ))
+                def _sk_chg_bar_clr(row):
+                    v = row.get("chg_pct")
+                    if v is None or (isinstance(v, float) and pd.isna(v)):
+                        return TEAL_DIM
+                    pos = v >= 0
+                    if sk_selected_abbr and row["state_abbr"] != sk_selected_abbr:
+                        return "rgba(22,163,74,0.35)" if pos else "rgba(220,38,38,0.35)"
+                    return GREEN if pos else RED
 
-                fig_skbar = go.Figure()
-                fig_skbar.add_trace(go.Bar(
-                    name=_cur_lbl,
-                    x=top15_sk["state_abbr"], y=top15_sk["disp_val"],
-                    marker_color=_cur_clrs,
-                    customdata=_cd,
-                    text=top15_sk["disp_val"].apply(_sk_bar_lbl),
+                bar_clrs   = [_sk_chg_bar_clr(r) for _, r in top15_sk.iterrows()]
+                bar_text   = top15_sk["chg_pct"].apply(
+                    lambda v: (f"+{v:.1f}%" if v >= 0 else f"{v:.1f}%")
+                    if pd.notna(v) else "")
+                customdata = list(zip(
+                    _bar_chg_nom, _bar_cur_fmt, _bar_pri_fmt))
+
+                fig_skbar = go.Figure(go.Bar(
+                    x=top15_sk["state_abbr"],
+                    y=_bar_chg_pct,
+                    marker_color=bar_clrs,
+                    customdata=customdata,
+                    text=bar_text,
                     textposition="outside",
-                    textfont=dict(color=WHITE, size=10),
+                    textfont=dict(size=11),
                     hovertemplate=(
                         f"<b>%{{x}}</b><br>"
-                        f"{_cur_lbl}: %{{y:{bar_ytick}}}{bar_ysuffix}<br>"
-                        f"{_pri_lbl}: %{{customdata[0]}}<br>"
-                        f"Change: %{{customdata[1]}} (%{{customdata[2]}})"
+                        f"Change: %{{customdata[0]}}<br>"
+                        f"{_cur_lbl}: %{{customdata[1]}}<br>"
+                        f"{_pri_lbl}: %{{customdata[2]}}"
                         f"<extra></extra>"
                     ),
                 ))
-                fig_skbar.add_trace(go.Bar(
-                    name=_pri_lbl,
-                    x=top15_sk["state_abbr"], y=top15_sk["prior_value"],
-                    marker_color=_pri_clrs,
-                    customdata=_cd_pri,
-                    text=top15_sk["prior_value"].apply(
-                        lambda v: _sk_bar_lbl(v) if pd.notna(v) else ""),
-                    textposition="outside",
-                    textfont=dict(color="#9ca3af", size=10),
-                    hovertemplate=(
-                        f"<b>%{{x}}</b><br>"
-                        f"{_pri_lbl}: %{{y:{bar_ytick}}}{bar_ysuffix}<br>"
-                        f"{_cur_lbl}: %{{customdata[0]}}<br>"
-                        f"Change: %{{customdata[1]}} (%{{customdata[2]}})"
-                        f"<extra></extra>"
-                    ),
-                ))
-                _base_layout(fig_skbar, title=bar_title, height=440)
-                fig_skbar.update_layout(
-                    barmode="group",
-                    showlegend=True,
-                    legend=dict(
-                        orientation="h", y=1.06, x=0.5, xanchor="center",
-                        font=dict(color=TXT, size=11),
-                        bgcolor="rgba(0,0,0,0)",
-                    ),
-                )
+                _base_layout(fig_skbar, title=bar_title, height=420)
+                fig_skbar.update_yaxes(tickformat="+.1f", ticksuffix="%")
+                fig_skbar.update_layout(showlegend=False)
+                fig_skbar.add_hline(y=0, line_width=1, line_color=BORDER)
             else:
                 # ── Single bar (Value mode) ────────────────────────────────────
                 bar_title = bar_title_base
@@ -2814,9 +2795,9 @@ with tab_stocks:
                     ),
                 ))
                 _base_layout(fig_skbar, title=bar_title, height=400)
+                fig_skbar.update_yaxes(tickformat=bar_ytick, ticksuffix=bar_ysuffix)
                 fig_skbar.update_layout(showlegend=False)
 
-            fig_skbar.update_yaxes(tickformat=bar_ytick, ticksuffix=bar_ysuffix)
             st.plotly_chart(fig_skbar, use_container_width=True)
 
             # ── State comparison table ────────────────────────────────────────
