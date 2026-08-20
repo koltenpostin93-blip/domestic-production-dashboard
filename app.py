@@ -277,6 +277,17 @@ PREV_QUARTER = {
     "JUN 1": ("MAR 1",  0),
     "SEP 1": ("JUN 1",  0),
 }
+# Quarter in which new-crop production enters storage — must add production to prior stocks
+# to compute true disappearance for that quarter.
+#   Fall-harvest crops (corn, soybeans, sorghum, barley): harvest Oct-Nov → enters Dec 1
+#   Wheat (winter/spring):    harvest Jun-Jul           → enters Sep 1
+HARVEST_QUARTER = {
+    "Corn":     "DEC 1",
+    "Soybeans": "DEC 1",
+    "Sorghum":  "DEC 1",
+    "Barley":   "DEC 1",
+    "Wheat":    "SEP 1",
+}
 
 # Commodities that have quarterly grain stocks in NASS; maps to API params
 STOCKS_META = {
@@ -331,7 +342,7 @@ st.set_page_config(
     page_title="Domestic Production | JSA",
     page_icon="🌾",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(f"""
@@ -956,6 +967,73 @@ def load_stocks_national(commodity: str, quarter: str, y0: int, y1: int,
     df = df.groupby("year", as_index=False)["value"].sum()
     return df[["year", "value"]].sort_values("year")
 
+# ── Production loaders (for disappearance calculation) ───────────────────────
+def _prod_fetch_params(commodity: str) -> dict:
+    """Return NASS fetch params for state-level annual final production."""
+    if commodity not in COMMODITIES:
+        return {}
+    prod_key = next((k for k in COMMODITIES[commodity] if "Production" in k), None)
+    if not prod_key:
+        return {}
+    mp = COMMODITIES[commodity][prod_key]
+    return {k: v for k, v in mp.items()
+            if k not in ("reference_period_desc", "agg_level_desc")}
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_production_snapshot(commodity: str, year: int) -> pd.DataFrame:
+    """State-level annual production for one year — used in disappearance snapshot."""
+    base = _prod_fetch_params(commodity)
+    if not base:
+        return pd.DataFrame()
+    df = _fetch({**base, "agg_level_desc": "STATE", "domain_desc": "TOTAL",
+                 "freq_desc": "ANNUAL", "reference_period_desc": "YEAR",
+                 "year": str(year)})
+    if df.empty:
+        return pd.DataFrame()
+    df["value"]      = df["Value"].apply(_clean)
+    df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
+    df = df.dropna(subset=["value", "state_abbr"])
+    df = df[df["value"] > 0]
+    df = df.groupby(["state_abbr", "state_name"], as_index=False)["value"].sum()
+    return df[["state_abbr", "state_name", "value"]].copy()
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_production_state_history(commodity: str, y0: int, y1: int) -> pd.DataFrame:
+    """State-level annual production across a year range — used in disappearance table."""
+    base = _prod_fetch_params(commodity)
+    if not base:
+        return pd.DataFrame()
+    df = _fetch({**base, "agg_level_desc": "STATE", "domain_desc": "TOTAL",
+                 "freq_desc": "ANNUAL", "reference_period_desc": "YEAR",
+                 "year__GE": str(y0), "year__LE": str(y1)})
+    if df.empty:
+        return pd.DataFrame()
+    df["year"]       = df["year"].astype(int)
+    df["value"]      = df["Value"].apply(_clean)
+    df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
+    df = df.dropna(subset=["value", "state_abbr"])
+    df = df[df["value"] > 0]
+    df = df.groupby(["year", "state_abbr", "state_name"], as_index=False)["value"].sum()
+    return df[["year", "state_abbr", "state_name", "value"]].sort_values(["state_abbr", "year"])
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_production_nat_history(commodity: str, y0: int, y1: int) -> pd.DataFrame:
+    """National annual production across a year range — used in disappearance table footer."""
+    base = _prod_fetch_params(commodity)
+    if not base:
+        return pd.DataFrame()
+    df = _fetch({**base, "agg_level_desc": "NATIONAL", "domain_desc": "TOTAL",
+                 "freq_desc": "ANNUAL", "reference_period_desc": "YEAR",
+                 "year__GE": str(y0), "year__LE": str(y1)})
+    if df.empty:
+        return pd.DataFrame()
+    df["year"]  = df["year"].astype(int)
+    df["value"] = df["Value"].apply(_clean)
+    df = df.dropna(subset=["value"])
+    df = df[df["value"] > 0]
+    df = df.groupby("year", as_index=False)["value"].sum()
+    return df[["year", "value"]].sort_values("year")
+
 # ── Revision-history loader ──────────────────────────────────────────────────
 @st.cache_data(ttl=300, show_spinner=False)
 def load_revision_data(commodity: str, metric: str, y0: int, y1: int,
@@ -1245,58 +1323,43 @@ def load_wasde_excel_month(comm_name: str, mkt_year: int, report_year: int, repo
         return {}
 
 
-# ── Sidebar ──────────────────────────────────────────────────────────────────
-with st.sidebar:
-    st.markdown(
-        f"<div class='jsa-sidebar-logo'><img src='{LOGO_WHITE}' alt='JSA Logo'></div>",
-        unsafe_allow_html=True,
-    )
-    st.markdown(
-        f"<p style='color:{GRAY};font-size:11px;text-align:center;margin:-8px 0 12px;'>"
-        f"DOMESTIC PRODUCTION</p>",
-        unsafe_allow_html=True,
-    )
-    st.markdown("---")
-
-    commodity = st.selectbox(
-        "Commodity",
-        list(COMMODITIES.keys()),
-    )
-    metric_list = list(COMMODITIES[commodity].keys())
-
-    st.markdown("---")
-    year_range = st.slider("Historical Range", 1980, THIS_YEAR, (1990, THIS_YEAR), step=1)
-
-    st.markdown("---")
-    st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>State Level</p>", unsafe_allow_html=True)
-    map_year = st.selectbox("Map Year", list(range(THIS_YEAR, 1999, -1)))
-
-    st.markdown("---")
-    st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>Quarterly Stocks</p>", unsafe_allow_html=True)
-    stocks_year = st.selectbox("Stocks Year", list(range(THIS_YEAR, 1999, -1)))
-
-    st.markdown("---")
-    st.markdown(f"<p style='color:{GRAY};font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.05em'>WASDE</p>", unsafe_allow_html=True)
-    wasde_year = st.selectbox("WASDE Year", list(range(THIS_YEAR, 1999, -1)), key="wasde_year_sel")
-
-    st.markdown("---")
-    if st.button("🔄 Force Update", use_container_width=True, help="Clear all cached data and reload from USDA NASS"):
-        st.cache_data.clear()
-        st.rerun()
-
-
 # ── Header ───────────────────────────────────────────────────────────────────
+# Read commodity from session_state so header renders before the selectbox widget
+_commodity_opts = list(COMMODITIES.keys())
+_hdr_commodity  = st.session_state.get("commodity_sel", _commodity_opts[0])
+
 st.markdown("<div class='jsa-topbar'></div>", unsafe_allow_html=True)
 st.markdown(f"""
 <div class='jsa-header'>
   <img src='{LOGO_COLOR}' alt='JSA'>
   <div class='jsa-header-divider'></div>
   <div>
-    <div class='jsa-header-title'>{commodity} Production Dashboard</div>
+    <div class='jsa-header-title'>{_hdr_commodity} Production Dashboard</div>
     <div class='jsa-header-sub'>National &amp; State Level &nbsp;·&nbsp; USDA NASS Annual Data &nbsp;·&nbsp; John Stewart &amp; Associates</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+# ── Filters ──────────────────────────────────────────────────────────────────
+_fc1, _fc2, _fc3, _fc4, _fc5, _fc6 = st.columns([2, 3, 1.5, 1.5, 1.5, 0.8])
+with _fc1:
+    commodity = st.selectbox("Commodity", _commodity_opts, key="commodity_sel")
+metric_list = list(COMMODITIES[commodity].keys())
+with _fc2:
+    year_range = st.slider("Historical Range", 1980, THIS_YEAR, (1990, THIS_YEAR), step=1)
+with _fc3:
+    map_year = st.selectbox("Map Year", list(range(THIS_YEAR, 1999, -1)))
+with _fc4:
+    stocks_year = st.selectbox("Stocks Year", list(range(THIS_YEAR, 1999, -1)))
+with _fc5:
+    wasde_year = st.selectbox("WASDE Year", list(range(THIS_YEAR, 1999, -1)), key="wasde_year_sel")
+with _fc6:
+    st.markdown("<div style='margin-top:26px'></div>", unsafe_allow_html=True)
+    if st.button("🔄", help="Clear cached data and reload from USDA NASS", use_container_width=True):
+        st.cache_data.clear()
+        st.rerun()
+
+st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
 # ── Load data ────────────────────────────────────────────────────────────────
 with st.spinner("Fetching USDA NASS data..."):
@@ -2390,9 +2453,19 @@ with tab_stocks:
         storage_lbl   = sk_storage
         st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
 
-        # ── View toggle (only when On Farm / Off Farm selected) ───────────────
+        # ── Mode toggle: Stocks vs Disappearance ──────────────────────────────
+        sk_mode = st.radio(
+            "Mode",
+            ["Stocks", "Disappearance"],
+            horizontal=True,
+            label_visibility="collapsed",
+            key="sk_mode",
+        )
+        st.markdown("<div style='margin-bottom:4px'></div>", unsafe_allow_html=True)
+
+        # ── View toggle (only when On Farm / Off Farm selected AND Stocks mode) ─
         pct_mode = False
-        if sk_storage != "Total":
+        if sk_storage != "Total" and sk_mode == "Stocks":
             sk_view  = st.radio(
                 "View",
                 ["Numerical", "% of Total"],
@@ -2402,9 +2475,14 @@ with tab_stocks:
             )
             pct_mode = (sk_view == "% of Total")
 
+        # In disappearance mode "vs Last Report" is not meaningful — only offer
+        # Value / vs Last Year
+        _cmp_opts = (["Value", "vs Last Year"]
+                     if sk_mode == "Disappearance"
+                     else ["Value", "vs Last Year", "vs Last Report"])
         sk_cmp = st.radio(
             "Compare to",
-            ["Value", "vs Last Year", "vs Last Report"],
+            _cmp_opts,
             horizontal=True,
             label_visibility="collapsed",
             key="sk_cmp",
@@ -2441,6 +2519,16 @@ with tab_stocks:
                 sk_tot_snap_prior = load_stocks_snapshot(commodity, _prev_q, _prev_yr, "TOTAL")
             else:
                 sk_tot_snap = sk_tot_snap_prior = pd.DataFrame()
+            # Disappearance mode: load the immediately-prior quarter + optional production
+            if sk_mode == "Disappearance":
+                _da_q_s, _da_yr_delta_s = PREV_QUARTER[sk_quarter]
+                _da_yr_s = stocks_year + _da_yr_delta_s
+                sk_da_prior_snap = load_stocks_snapshot(commodity, _da_q_s, _da_yr_s, "TOTAL")
+                sk_da_prod_snap  = (load_production_snapshot(commodity, stocks_year)
+                                    if HARVEST_QUARTER.get(commodity) == sk_quarter
+                                    else pd.DataFrame())
+            else:
+                sk_da_prior_snap = sk_da_prod_snap = pd.DataFrame()
 
         if sk_snap.empty:
             c_msg, c_btn = st.columns([5, 1])
@@ -2458,6 +2546,33 @@ with tab_stocks:
             else:
                 sk_snap["disp_val"] = sk_snap["value"]
                 pct_mode = False   # fallback if total snap is empty
+
+            # ── Disappearance override ─────────────────────────────────────────
+            if sk_mode == "Disappearance":
+                if not sk_da_prior_snap.empty:
+                    _da_m = sk_snap[["state_abbr", "state_name", "value"]].merge(
+                        sk_da_prior_snap[["state_abbr", "value"]].rename(
+                            columns={"value": "_prior"}),
+                        on="state_abbr", how="left",
+                    )
+                    if not sk_da_prod_snap.empty:
+                        _da_m = _da_m.merge(
+                            sk_da_prod_snap[["state_abbr", "value"]].rename(
+                                columns={"value": "_prod"}),
+                            on="state_abbr", how="left",
+                        )
+                        _da_m["_prod"] = _da_m["_prod"].fillna(0)
+                    else:
+                        _da_m["_prod"] = 0.0
+                    _da_m["disp_val"] = _da_m["_prior"] + _da_m["_prod"] - _da_m["value"]
+                    sk_snap["disp_val"] = (
+                        _da_m.set_index("state_abbr")["disp_val"]
+                        .reindex(sk_snap["state_abbr"].values).values
+                    )
+                else:
+                    st.warning(
+                        f"No {_da_q_s} {_da_yr_s} stocks data — cannot compute disappearance.")
+                    sk_mode = "Stocks"
 
             # Prior-year display values
             if not sk_snap_prior.empty:
@@ -2491,7 +2606,13 @@ with tab_stocks:
                     lambda v: _nom_chg_str(v, sk_metric))
 
             # ── Choropleth map ────────────────────────────────────────────────
-            if pct_mode:
+            if sk_mode == "Disappearance":
+                _da_period_lbl = f"{_da_q_s} {_da_yr_s} → {sk_quarter} {stocks_year}"
+                map_title     = f"{commodity} Disappearance — {_da_period_lbl} (Million Bu)"
+                cbar_title    = "Disappearance (M Bu)"
+                hover_val_fmt = ",.1f"
+                hover_val_sfx = ""
+            elif pct_mode:
                 map_title  = f"{commodity} Stocks ({storage_lbl}) — {sk_quarter} {stocks_year} (% of Total)"
                 cbar_title = "% of Total"
                 hover_val_fmt = ".1f"
@@ -2589,28 +2710,122 @@ with tab_stocks:
                 c1.caption("Click a state on the map")
 
             # ── Top-15 bar ────────────────────────────────────────────────────
-            top15_sk = sk_snap.sort_values("disp_val", ascending=False).head(15)
-            bar_clrs = [TEAL if r["state_abbr"] == sk_selected_abbr else TEAL_DIM
-                        for _, r in top15_sk.iterrows()]
-            bar_ytick  = ".1f" if pct_mode else ",.0f"
+            top15_sk    = sk_snap.sort_values("disp_val", ascending=False).head(15)
+            bar_ytick   = ".1f" if pct_mode else ",.0f"
             bar_ysuffix = "%" if pct_mode else ""
-            bar_col_lbl = "% of Total" if pct_mode else sk_metric
-            bar_title   = f"Top 15 States — {storage_lbl} Stocks ({sk_quarter} {stocks_year})"
-            if pct_mode: bar_title += " — % of Total"
-            fig_skbar = go.Figure(go.Bar(
-                x=top15_sk["state_abbr"], y=top15_sk["disp_val"],
-                marker_color=bar_clrs,
-                text=top15_sk["disp_val"].apply(_sk_bar_lbl),
-                textposition="outside", textfont=dict(color=WHITE, size=11),
-                hovertemplate="<b>%{x}</b><br>" + bar_col_lbl + ": %{y:" + bar_ytick + "}" + bar_ysuffix + "<extra></extra>",
-            ))
-            _base_layout(fig_skbar, title=bar_title, height=400)
+            bar_col_lbl = ("% of Total" if pct_mode
+                           else "Disappearance (M Bu)" if sk_mode == "Disappearance"
+                           else sk_metric)
+            if sk_mode == "Disappearance":
+                bar_title_base = f"Top 15 States — Disappearance ({sk_quarter} {stocks_year}, M Bu)"
+            elif pct_mode:
+                bar_title_base = f"Top 15 States — {storage_lbl} Stocks ({sk_quarter} {stocks_year}) — % of Total"
+            else:
+                bar_title_base = f"Top 15 States — {storage_lbl} Stocks ({sk_quarter} {stocks_year})"
+
+            _has_prior_bar = (
+                sk_cmp != "Value"
+                and "prior_value" in top15_sk.columns
+                and not top15_sk["prior_value"].isna().all()
+            )
+
+            if _has_prior_bar:
+                # ── Grouped bar: current (teal) + prior (gray), same 15 states ──
+                _cur_lbl = f"{sk_quarter} {stocks_year}"
+                _pri_lbl = _cmp_label if _cmp_label else "Prior"
+                bar_title = f"{bar_title_base}  vs  {_pri_lbl}"
+
+                _cur_clrs = [TEAL if r["state_abbr"] == sk_selected_abbr else TEAL_DIM
+                             for _, r in top15_sk.iterrows()]
+                _pri_clrs = ["#6b7280" if r["state_abbr"] == sk_selected_abbr else "#9ca3af"
+                             for _, r in top15_sk.iterrows()]
+
+                # customdata cols: [prior_fmt, chg_nom_str, chg_pct_str]
+                _cd = list(zip(
+                    top15_sk["prior_value"].apply(
+                        lambda v: _sk_bar_lbl(v) if pd.notna(v) else "N/A"),
+                    top15_sk["chg_nom_str"].fillna("N/A"),
+                    top15_sk["chg_pct_str"].fillna("N/A"),
+                ))
+                _cd_pri = list(zip(
+                    top15_sk["disp_val"].apply(_sk_bar_lbl),
+                    top15_sk["chg_nom_str"].fillna("N/A"),
+                    top15_sk["chg_pct_str"].fillna("N/A"),
+                ))
+
+                fig_skbar = go.Figure()
+                fig_skbar.add_trace(go.Bar(
+                    name=_cur_lbl,
+                    x=top15_sk["state_abbr"], y=top15_sk["disp_val"],
+                    marker_color=_cur_clrs,
+                    customdata=_cd,
+                    text=top15_sk["disp_val"].apply(_sk_bar_lbl),
+                    textposition="outside",
+                    textfont=dict(color=WHITE, size=10),
+                    hovertemplate=(
+                        f"<b>%{{x}}</b><br>"
+                        f"{_cur_lbl}: %{{y:{bar_ytick}}}{bar_ysuffix}<br>"
+                        f"{_pri_lbl}: %{{customdata[0]}}<br>"
+                        f"Change: %{{customdata[1]}} (%{{customdata[2]}})"
+                        f"<extra></extra>"
+                    ),
+                ))
+                fig_skbar.add_trace(go.Bar(
+                    name=_pri_lbl,
+                    x=top15_sk["state_abbr"], y=top15_sk["prior_value"],
+                    marker_color=_pri_clrs,
+                    customdata=_cd_pri,
+                    text=top15_sk["prior_value"].apply(
+                        lambda v: _sk_bar_lbl(v) if pd.notna(v) else ""),
+                    textposition="outside",
+                    textfont=dict(color="#9ca3af", size=10),
+                    hovertemplate=(
+                        f"<b>%{{x}}</b><br>"
+                        f"{_pri_lbl}: %{{y:{bar_ytick}}}{bar_ysuffix}<br>"
+                        f"{_cur_lbl}: %{{customdata[0]}}<br>"
+                        f"Change: %{{customdata[1]}} (%{{customdata[2]}})"
+                        f"<extra></extra>"
+                    ),
+                ))
+                _base_layout(fig_skbar, title=bar_title, height=440)
+                fig_skbar.update_layout(
+                    barmode="group",
+                    showlegend=True,
+                    legend=dict(
+                        orientation="h", y=1.06, x=0.5, xanchor="center",
+                        font=dict(color=TXT, size=11),
+                        bgcolor="rgba(0,0,0,0)",
+                    ),
+                )
+            else:
+                # ── Single bar (Value mode) ────────────────────────────────────
+                bar_title = bar_title_base
+                bar_clrs  = [TEAL if r["state_abbr"] == sk_selected_abbr else TEAL_DIM
+                             for _, r in top15_sk.iterrows()]
+                fig_skbar = go.Figure(go.Bar(
+                    x=top15_sk["state_abbr"], y=top15_sk["disp_val"],
+                    marker_color=bar_clrs,
+                    text=top15_sk["disp_val"].apply(_sk_bar_lbl),
+                    textposition="outside", textfont=dict(color=WHITE, size=11),
+                    hovertemplate=(
+                        "<b>%{x}</b><br>" + bar_col_lbl
+                        + ": %{y:" + bar_ytick + "}" + bar_ysuffix
+                        + "<extra></extra>"
+                    ),
+                ))
+                _base_layout(fig_skbar, title=bar_title, height=400)
+                fig_skbar.update_layout(showlegend=False)
+
             fig_skbar.update_yaxes(tickformat=bar_ytick, ticksuffix=bar_ysuffix)
-            fig_skbar.update_layout(showlegend=False)
             st.plotly_chart(fig_skbar, use_container_width=True)
 
             # ── State comparison table ────────────────────────────────────────
-            if pct_mode:
+            if sk_mode == "Disappearance":
+                tbl_unit_lbl = _tbl_unit(sk_metric)
+                tbl_unit_sfx = (f" <span style='color:{TEAL};font-weight:400;text-transform:none;"
+                                f"letter-spacing:0'>({tbl_unit_lbl})</span>" if tbl_unit_lbl else "")
+                tbl_hdr_lbl = f"Disappearance — {sk_quarter}{tbl_unit_sfx}"
+            elif pct_mode:
                 tbl_hdr_lbl = f"% of Total — {storage_lbl} {sk_quarter} Stocks"
             else:
                 tbl_unit_lbl = _tbl_unit(sk_metric)
@@ -2635,6 +2850,22 @@ with tab_stocks:
                     sk_nat_tot  = load_stocks_national(commodity, sk_quarter, sk_y0, stocks_year, "TOTAL")
                 else:
                     sk_hist_tot = sk_nat_tot = pd.DataFrame()
+                # Disappearance mode: load prior quarter history + optional production
+                if sk_mode == "Disappearance":
+                    _da_q_t, _da_yr_delta_t = PREV_QUARTER[sk_quarter]
+                    sk_da_ph = load_stocks_history(
+                        commodity, _da_q_t,
+                        sk_y0 + _da_yr_delta_t, stocks_year + _da_yr_delta_t, "TOTAL")
+                    sk_da_phn = load_stocks_national(
+                        commodity, _da_q_t,
+                        sk_y0 + _da_yr_delta_t, stocks_year + _da_yr_delta_t, "TOTAL")
+                    _da_is_harvest = (HARVEST_QUARTER.get(commodity) == sk_quarter)
+                    sk_da_prsh = (load_production_state_history(commodity, sk_y0, stocks_year)
+                                  if _da_is_harvest else pd.DataFrame())
+                    sk_da_prnh = (load_production_nat_history(commodity, sk_y0, stocks_year)
+                                  if _da_is_harvest else pd.DataFrame())
+                else:
+                    sk_da_ph = sk_da_phn = sk_da_prsh = sk_da_prnh = pd.DataFrame()
 
             if sk_hist.empty or "state_abbr" not in sk_hist.columns:
                 c_msg2, c_btn2 = st.columns([5, 1])
@@ -2662,6 +2893,48 @@ with tab_stocks:
                     sk_nat_disp = _nm[["year","disp_val"]].rename(columns={"disp_val":"value"})
                 else:
                     sk_nat_disp = sk_nat
+
+                # ── Disappearance: override state and national history ─────────
+                if sk_mode == "Disappearance" and not sk_da_ph.empty:
+                    # Align prior quarter year to match the current quarter year
+                    _da_ph2 = sk_da_ph.copy()
+                    _da_ph2["year"] = _da_ph2["year"] - _da_yr_delta_t
+                    # State-level disappearance
+                    _hm2 = sk_hist_disp.merge(
+                        _da_ph2[["year","state_abbr","value"]].rename(
+                            columns={"value":"_prior"}),
+                        on=["year","state_abbr"], how="left",
+                    )
+                    if not sk_da_prsh.empty:
+                        _hm2 = _hm2.merge(
+                            sk_da_prsh[["year","state_abbr","value"]].rename(
+                                columns={"value":"_prod"}),
+                            on=["year","state_abbr"], how="left",
+                        )
+                        _hm2["_prod"] = _hm2["_prod"].fillna(0)
+                    else:
+                        _hm2["_prod"] = 0.0
+                    _hm2["disapp"] = _hm2["_prior"] + _hm2["_prod"] - _hm2["value"]
+                    sk_hist_disp = _hm2[["year","state_abbr","state_name","disapp"]].rename(
+                        columns={"disapp":"value"})
+                    # National disappearance
+                    if not sk_da_phn.empty:
+                        _da_phn2 = sk_da_phn.copy()
+                        _da_phn2["year"] = _da_phn2["year"] - _da_yr_delta_t
+                        _nm2 = sk_nat_disp.merge(
+                            _da_phn2[["year","value"]].rename(columns={"value":"_prior"}),
+                            on="year", how="left",
+                        )
+                        if not sk_da_prnh.empty:
+                            _nm2 = _nm2.merge(
+                                sk_da_prnh[["year","value"]].rename(columns={"value":"_prod"}),
+                                on="year", how="left",
+                            )
+                            _nm2["_prod"] = _nm2["_prod"].fillna(0)
+                        else:
+                            _nm2["_prod"] = 0.0
+                        _nm2["disapp"] = _nm2["_prior"] + _nm2["_prod"] - _nm2["value"]
+                        sk_nat_disp = _nm2[["year","disapp"]].rename(columns={"disapp":"value"})
 
                 sk_nat_yr   = dict(zip(sk_nat_disp["year"], sk_nat_disp["value"])) if not sk_nat_disp.empty else {}
                 sk_nat6     = [sk_nat_yr.get(yr) for yr in sk_years[-6:]]
@@ -4330,3 +4603,21 @@ with tab_wasde:
             f"{_sum_th}<tbody>{_sum_rows}</tbody></table></div>",
             unsafe_allow_html=True,
         )
+
+# ── Legal Disclaimer Footer ───────────────────────────────────────────────────
+
+_disclaimer_year = date.today().year
+st.markdown("<hr style='border-color:#e5e7eb;margin-top:32px;margin-bottom:16px'>", unsafe_allow_html=True)
+st.markdown(
+    f'<div style="color:#9ca3af;font-size:0.68rem;line-height:1.6;text-align:center;padding:0 24px 24px;">'
+    f'Trading commodity futures, options on futures, cash commodities, and over-the-counter derivative products involves substantial risk of loss and may not be suitable for all investors. '
+    f'This communication is provided for informational purposes only and does not constitute investment advice, a recommendation, or an offer or solicitation to buy or sell any futures, options, cash commodities, or derivative products. '
+    f'John Stewart &amp; Associates, Inc. does not accept orders to buy or sell any financial instruments via email. '
+    f'The information contained herein has been obtained from sources believed to be reliable; however, its accuracy and completeness are not guaranteed. '
+    f'Any opinions expressed are solely those of the author, are subject to change without notice, and should not be relied upon as a basis for investment decisions. '
+    f'Past performance is not indicative of future results. '
+    f'This message may contain confidential or proprietary information intended solely for the use of the designated recipient. '
+    f'&copy; John Stewart &amp; Associates, Inc. {_disclaimer_year}'
+    f'</div>',
+    unsafe_allow_html=True,
+)
