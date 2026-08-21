@@ -1040,11 +1040,9 @@ def load_nass_storage_capacity(y0: int, y1: int) -> pd.DataFrame:
     """NASS grain storage capacity by state/year — on-farm and off-farm.
     Returns: year, state_abbr, short_desc, value_bu"""
     df = _fetch({
-        "commodity_desc":    "GRAIN STORAGE",
+        "commodity_desc":    "GRAIN STORAGE CAPACITY",
         "statisticcat_desc": "CAPACITY",
         "agg_level_desc":    "STATE",
-        "domain_desc":       "TOTAL",
-        "freq_desc":         "ANNUAL",
         "year__GE":          str(y0),
         "year__LE":          str(y1),
     })
@@ -1052,9 +1050,11 @@ def load_nass_storage_capacity(y0: int, y1: int) -> pd.DataFrame:
         return pd.DataFrame()
     df["year"]       = df["year"].astype(int)
     df["value_bu"]   = df["Value"].apply(_clean)
-    df["state_abbr"] = df["state_name"].str.upper().map(STATE_ABBREV)
+    df["state_abbr"] = df["state_alpha"].str.upper()
     df = df.dropna(subset=["value_bu", "state_abbr"])
     df = df[df["value_bu"] > 0]
+    # Drop aggregate rows (OTHER STATES, US TOTAL)
+    df = df[~df["state_abbr"].isin(["OT", "US"])]
     return df[["year", "state_abbr", "short_desc", "value_bu"]].copy()
 
 # ── Multi-commodity production loader (for storage vs production) ─────────────
